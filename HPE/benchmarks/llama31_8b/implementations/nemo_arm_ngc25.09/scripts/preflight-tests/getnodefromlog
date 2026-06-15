@@ -1,0 +1,3 @@
+#!/bin/bash
+
+grep DLPAL "${1}" | grep -v echo | sed -E -e 's/^.*:::DLPAL //' | cut -f4 -d' '
