@@ -43,22 +43,23 @@ cd "${BASE_DIR}"
 # data (~80 GB) -> creates ./data
 bash <(curl -s https://raw.githubusercontent.com/mlcommons/r2-downloader/refs/heads/main/mlc-r2-downloader.sh) -d data https://training.mlcommons-storage.org/metadata/llama-3-1-8b-preprocessed-c4-dataset.uri
 
-# model / tokenizer (~30 GB) -> creates ./model
+# model / tokenizer (~30 GB) -> downloads directly into ./model
 bash <(curl -s https://raw.githubusercontent.com/mlcommons/r2-downloader/refs/heads/main/mlc-r2-downloader.sh) -d model https://training.mlcommons-storage.org/metadata/llama-3-1-8b-tokenizer.uri
-
-# The MLPerf tokenizer downloader nests its files under model/llama3_1_8b_tokenizer/,
-# so this mv promotes them up to model/ (which is what MODELDIR must point at).
-mv llama3_1_8b_tokenizer model
 ```
 
-> **If you already have a full HuggingFace Llama-3.1-8B repo** (i.e. `MODELDIR` already contains
-> `tokenizer.json`, `tokenizer_config.json`, `special_tokens_map.json`, `config.json` at its top
-> level — typically alongside `*.safetensors`), then **skip the tokenizer download and the `mv`
-> above**. The model uses `tokenizer_type: HuggingFaceTokenizer` and loads the tokenizer via
-> `AutoTokenizer.from_pretrained(MODELDIR)`; a full HF checkout already satisfies that. The `mv`
-> only exists to flatten the *tokenizer-only* download package's nested subdirectory — it does not
-> apply to a full-repo layout. (Pretraining does not load the `*.safetensors` weights; only the
-> tokenizer files are needed.)
+> **No `mv` needed when you pass `-d model`.** The upstream MLProf README shows a trailing
+> `mv llama3_1_8b_tokenizer model`, but that step is a no-op (it fails, harmlessly) for the command
+> above. Reason, from the downloader source (`mlc-r2-downloader.sh`, pinned behavior): the
+> auto-subdirectory logic that would create `llama3_1_8b_tokenizer/` only runs when **no** `-d` is
+> given (`if [[ -z "$download_dir" ]]`). Passing `-d model` sets the destination explicitly and
+> skips that branch, so files land straight in `model/`. The `mv` in the upstream README is
+> inconsistent with its own `-d model` example — ignore it here.
+>
+> **If you already have a full HuggingFace Llama-3.1-8B repo**, just point `MODELDIR` at it and skip
+> the tokenizer download entirely. The model uses `tokenizer_type: HuggingFaceTokenizer` and loads
+> via `AutoTokenizer.from_pretrained(MODELDIR)`, which is satisfied by the top-level
+> `tokenizer.json` / `tokenizer_config.json` / `special_tokens_map.json` / `config.json`.
+> Pretraining does not load the `*.safetensors` weights; only the tokenizer files are needed.
 
 After the download is complete, you should see files with the following naming conventions under the data directory, ending with both `.idx` and `.bin`: 
 - Training partitions: `c4-train.en_6_text_document`
