@@ -1,6 +1,12 @@
 ARG BASE_IMAGE=docker.io/rocm/primus:v26.2
 FROM ${BASE_IMAGE}
 
+# GPU architectures to compile kernels for. Default keeps both (CDNA4 + CDNA3) as upstream.
+# For MI308X/MI325X (both gfx942) you can build for CDNA3 only to roughly halve TE/AITER
+# build time:
+#   docker build --build-arg GPU_ARCHS="gfx942" ...
+ARG GPU_ARCHS="gfx950;gfx942"
+
 # Install library dependencies
 WORKDIR /workspace
 
@@ -17,9 +23,9 @@ RUN git clone --recursive https://github.com/ROCm/TransformerEngine.git \
 
 RUN cd TransformerEngine \
     && NVTE_PROJECT_BUILDING=1 NVTE_USE_ROCM=1 NVTE_FUSED_ATTN_AOTRITON=0 \
-    NVTE_ROCM_ARCH="gfx950;gfx942" GPU_ARCHS="gfx950;gfx942" \
+    NVTE_ROCM_ARCH="${GPU_ARCHS}" GPU_ARCHS="${GPU_ARCHS}" \
     NVTE_FRAMEWORK='pytorch' \
-    NVTE_USE_HIPBLASLT=1 MAX_JOBS=128 PYTORCH_ROCM_ARCH="gfx950;gfx942" CU_NUM=304 \
+    NVTE_USE_HIPBLASLT=1 MAX_JOBS=128 PYTORCH_ROCM_ARCH="${GPU_ARCHS}" CU_NUM=304 \
     pip install --no-build-isolation -e . -v \
     && rm -rf /root/.cache
 
@@ -32,10 +38,12 @@ ENV PYTHONPATH="/workspace/aiter:${PYTHONPATH}"
 RUN echo "/workspace/aiter" > \
     $(python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])")/aiter_workspace.pth
 
-# Pre-compile AITER JIT modules
+# Pre-compile AITER JIT modules.
+# precompile_aiter.py defaults GPU_ARCHS to gfx950 via os.environ.setdefault, so pass the
+# build-arg through here to keep it consistent with the TE build above.
 RUN pip install psutil
 COPY precompile_aiter.py /tmp/precompile_aiter.py
-RUN python3 /tmp/precompile_aiter.py
+RUN GPU_ARCHS="${GPU_ARCHS}" python3 /tmp/precompile_aiter.py
 
 # Primus
 ARG PRIMUS_REPO=https://github.com/AMD-AGI/Primus.git

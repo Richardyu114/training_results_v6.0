@@ -4,11 +4,12 @@ os.environ.setdefault("GPU_ARCHS", "gfx950")
 
 from aiter.jit.core import get_args_of_build, build_module
 
+# module_gemm_a4w4_asm (codegen -m f4gemm) is the FP4 GEMM asm kernel, which is CDNA4-only and
+# unused by FP8 training on CDNA3 (gfx942). It is dropped here so it is not JIT-compiled at runtime.
 MODULES = [
     "module_aiter_enum",
     "module_rope_general_fwd",
     "module_rope_general_bwd",
-    "module_gemm_a4w4_asm",
 ]
 
 for name in MODULES:

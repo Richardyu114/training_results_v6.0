@@ -18,6 +18,17 @@ Run the following build command from the root of the repository. The build proce
 ```bash
 docker build -t rocm/amd-mlperf:llama31_8b_training_6.0 .
 ```
+
+**Speeding up the build (CDNA3 only).** The default builds kernels for both `gfx950;gfx942`, which
+is slow (the TransformerEngine / AITER CK-kernel compile is the long pole). Since MI308X and MI325X
+are both `gfx942`, you can build for CDNA3 alone via the `GPU_ARCHS` build-arg to roughly halve
+build time:
+
+```bash
+docker build --build-arg GPU_ARCHS="gfx942" -t rocm/amd-mlperf:llama31_8b_training_6.0 .
+```
+
+The resulting image runs on both MI308X and MI325X (it just won't run on gfx950/CDNA4).
 # 2. Prepare Dataset and Model
 
 The current codebase is using the c4/en/3.0.1 dataset from [HuggingFace/AllenAI](https://huggingface.co/datasets/allenai/c4) for train and evaluation.
