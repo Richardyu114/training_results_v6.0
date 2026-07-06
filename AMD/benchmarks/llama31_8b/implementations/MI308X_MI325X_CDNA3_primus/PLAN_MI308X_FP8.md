@@ -51,11 +51,21 @@ export NEXP=1
 bash run_with_docker.sh
 ```
 
+## FP8 键名（已核实 Primus 源码，commit d53c428）
+
+已对照 `AMD-AGI/Primus@d53c428` 源码确认：
+- `trainer_base.yaml:50-53`：`fp8`（格式，取值 `e4m3`/`hybrid`）与 `fp8_recipe`（scaling，
+  取值 `delayed`/`tensorwise`/`blockwise`/`mxfp8`，默认 `delayed`）是两个独立字段。
+- `fp8_utils.py:76-81`：`fp8` 只接受 `"e4m3"`/`"hybrid"`，写 `true` 会 `raise ValueError`。
+- 官方所有 FP8 示例（如 `examples/megatron/configs/MI300X/llama3_8B-FP8-pretrain.yaml:80`）
+  只写一行 `fp8: hybrid`，不设 `fp8_recipe`（走默认 delayed，无 TE 版本/env 门槛）。
+- → 本目录 yaml 用 `fp8: hybrid`。config 里的 `FP8_*` env Primus 不读取，仅信息性保留。
+
 ## 风险
 
-- **FP8 yaml 键名（最大不确定点）**：`fp8:` / `fp8_recipe:` 的确切写法需进镜像
-  `/workspace/Primus` 的 pre_trainer 配置 schema 确认；若报 unknown config key 据此调整。
 - **收敛不保证**：LR 沿用 8e-4（为 FP4 调），FP8 下可能需调；短程 run 先看 loss 下降。
+- **mxfp8 recipe（如日后想试）**：需 `NVTE_ROCM_ENABLE_MXFP8=1` 且 TE≥2.1（`utils.py:509`）；
+  当前用 delayed 无此约束。
 - **不可用于 MLPerf closed 提交**（精度已改）。
 
 ## 验证

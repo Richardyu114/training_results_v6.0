@@ -99,10 +99,12 @@ modules:
       cross_entropy_loss_fusion: true
 
       # --- Mixed Precision Config ---
-      # CDNA3 (MI308X/MI325X, gfx942) has no native FP4 -> use FP8 hybrid instead of mxfp4.
+      # CDNA3 (MI308X/MI325X, gfx942) has no native FP4 -> use FP8 instead of mxfp4.
       # Original MI350X/MI355X (CDNA4) config used: fp4: true / fp4_recipe: mxfp4
-      fp8: true
-      fp8_recipe: hybrid
+      # `fp8` selects the FP8 *format* (e4m3 | hybrid); recipe defaults to `delayed`
+      # (per-tensor amax history) which needs no TE-version/env gate, matching every
+      # official Primus FP8 example (e.g. examples/megatron/configs/MI300X/llama3_8B-FP8-pretrain.yaml).
+      fp8: hybrid
       accumulate_allreduce_grads_in_fp32: false
       grad_reduce_in_bf16: true
       attention_softmax_in_fp32: false

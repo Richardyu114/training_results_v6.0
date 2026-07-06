@@ -28,7 +28,9 @@ export PRIMUS_EVAL_INTERVAL=$((EVAL_SAMPLES_INTERVAL / PRIMUS_GLOBAL_BATCH_SIZE)
 export HSA_ENABLE_INTERRUPT=0
 export HSA_TOOLS_LIB=/opt/rocm/lib/libroctracer64.so
 export PRIMUS_APPLY_ROPE_FUSION=True
-export PRIMUS_FP8_RECIPE=hybrid
+# NOTE: Actual FP8 precision is controlled by `fp8: hybrid` in the yaml. The FP8_*
+# env vars below are AMD-submission-script conveniences; Primus does not read them
+# to set the recipe (scaling recipe defaults to `delayed`).
 
 export HSA_NO_SCRATCH_RECLAIM=1
 export HSA_ENABLE_SDMA=1
@@ -77,8 +79,8 @@ export MLLOG_MICRO_BATCH_SIZE=2
 export MLLOG_CONFIG_FILENAME=$(basename "${BASH_SOURCE[0]}")
 export MLLOG_LOWEST_NUMERICAL_PRECISION_LINEAR='fp8'
 
-export FP8=true
-export FP8_RECIPE=hybrid
+export FP8=true          # informational; real switch is `fp8: hybrid` in the yaml
+export FP8_RECIPE=hybrid  # informational; 'hybrid' is the FP8 *format*, not the scaling recipe
 
 export USE_HIPBLASLT=1
 export TORCH_BLAS_PREFER_HIPBLASLT=1
