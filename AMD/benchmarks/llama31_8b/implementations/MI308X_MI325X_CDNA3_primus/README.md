@@ -7,7 +7,7 @@ Small Language Model pretraining - Llama 3.1 8B using the Primus framework.
 > native FP4, so training precision is switched from **FP4/mxfp4** to **FP8 hybrid**
 > (`conf/llama3.1_8B-pretrain-fp8.yaml`). This is for **internal enablement / bring-up only**
 > and is **not a valid MLPerf closed submission** (precision differs from the ruleset).
-> See `PLAN_MI308X_FP8.md` for the full rationale and code evidence.
+> See section 5 below for the full rationale and code evidence.
 
 # 1. Setup Docker Image
 
@@ -143,4 +143,53 @@ We perform evaluation every **12288** sequences.
 
 ### Evaluation thoroughness
 
-We evaluate using **1024** sequences from our customized validation dataset. 
+We evaluate using **1024** sequences from our customized validation dataset.
+
+# 5. Background: why this CDNA3 directory exists
+
+## The official MI350X/MI355X submission trains in FP4
+
+This directory is a CDNA3 adaptation of the official submission, which trains in **FP4/mxfp4** — a
+CDNA4 (gfx950) feature. Evidence from the original `MI350X_EPYC_9575F_primus/`:
+
+| # | Evidence | Location |
+|---|---|---|
+| 1 | `fp4: true` / `fp4_recipe: mxfp4` | `conf/llama3.1_8B-pretrain-fp4.yaml` |
+| 2 | `FP4=true` / `FP4_RECIPE=mxfp4` | `config_MI350X_1x8x1.sh` |
+| 3 | `MLLOG_LOWEST_NUMERICAL_PRECISION_LINEAR='mxfp4'` (MLPerf closed declaration) | `config_MI350X_1x8x1.sh` |
+| 4 | FP4 GEMM kernel `_ZN5aiter42f4gemm_bf16_per1x32Fp4_...` (A4W4, MXFP4 1×32 block scaling) | `a4w4_tuned_gemms.csv` |
+| 5 | `NVTE_MXFP4_USE_HADAMARD=1` | `config_MI350X_1x8x1.sh` |
+
+The aiter FP4 GEMM in (4) needs native FP4 matrix instructions that **CDNA3 (gfx942) does not have**,
+which is why MI308X/MI325X cannot reproduce the FP4 submission and this FP8 variant exists.
+
+## MI308X vs MI325X
+
+Same arch (gfx942), same FP8 support, no FP4 on either. They differ only in VRAM
+(MI308X ≈ 192 GB, MI325X = 256 GB) and compute. So they share one Dockerfile / yaml / run scripts;
+only the config label differs (`config_MI308X_1x8x1.sh` vs `config_MI325X_1x8x1.sh`).
+
+## FP8 config keys (verified against Primus source @ `d53c428`)
+
+- `trainer_base.yaml`: `fp8` (format: `e4m3`/`hybrid`) and `fp8_recipe` (scaling:
+  `delayed`/`tensorwise`/`blockwise`/`mxfp8`, default `delayed`) are **two separate fields**.
+- `fp8_utils.py`: `fp8` only accepts `"e4m3"`/`"hybrid"` — passing `true` raises `ValueError`.
+  Hence the yaml uses `fp8: hybrid` (a single line), not `fp8: true`.
+- The `FP8_*` env vars in the config are informational; Primus does not read them to set the recipe.
+
+## Notes / risks
+
+- **Convergence is not guaranteed.** LR is inherited as `8e-4` (tuned for FP4); FP8 may need a
+  different value. Watch loss on a short run first.
+- **VRAM.** MI308X (~192 GB) is smaller than the MI350X (288 GB) this was tuned on, and FP8 keeps
+  more activation copies than FP4. If you hit OOM, lower `PRIMUS_MICRO_BATCH_SIZE` from `2` to `1`
+  (halves activation memory; `PRIMUS_GLOBAL_BATCH_SIZE` stays `32`, so convergence is unaffected —
+  grad-accumulation just goes 2 → 4). Do **not** change `PRIMUS_GLOBAL_BATCH_SIZE`.
+- **mxfp8 recipe** (if ever tried) requires `NVTE_ROCM_ENABLE_MXFP8=1` and TE ≥ 2.1; the default
+  `delayed` recipe used here has no such gate.
+- **Not a valid MLPerf closed submission** — precision differs from the ruleset.
+
+## Parallelism
+
+`TP=PP=CP=EP=1`, pure data-parallel over 8 GPUs (8B fits per GPU), `use_distributed_optimizer=true`
+shards optimizer state across DP. `micro_batch_size=2`, `global_batch_size=32`, `seq_length=8192`.
