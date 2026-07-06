@@ -46,14 +46,25 @@ bash <(curl -s https://raw.githubusercontent.com/mlcommons/r2-downloader/refs/he
 # model / tokenizer (~30 GB) -> creates ./model
 bash <(curl -s https://raw.githubusercontent.com/mlcommons/r2-downloader/refs/heads/main/mlc-r2-downloader.sh) -d model https://training.mlcommons-storage.org/metadata/llama-3-1-8b-tokenizer.uri
 
+# The MLPerf tokenizer downloader nests its files under model/llama3_1_8b_tokenizer/,
+# so this mv promotes them up to model/ (which is what MODELDIR must point at).
 mv llama3_1_8b_tokenizer model
 ```
+
+> **If you already have a full HuggingFace Llama-3.1-8B repo** (i.e. `MODELDIR` already contains
+> `tokenizer.json`, `tokenizer_config.json`, `special_tokens_map.json`, `config.json` at its top
+> level — typically alongside `*.safetensors`), then **skip the tokenizer download and the `mv`
+> above**. The model uses `tokenizer_type: HuggingFaceTokenizer` and loads the tokenizer via
+> `AutoTokenizer.from_pretrained(MODELDIR)`; a full HF checkout already satisfies that. The `mv`
+> only exists to flatten the *tokenizer-only* download package's nested subdirectory — it does not
+> apply to a full-repo layout. (Pretraining does not load the `*.safetensors` weights; only the
+> tokenizer files are needed.)
 
 After the download is complete, you should see files with the following naming conventions under the data directory, ending with both `.idx` and `.bin`: 
 - Training partitions: `c4-train.en_6_text_document`
 - Validation partitions: `c4-validation-91205-samples.en_text_document`
 
-The data directory is ~80 GB and model directory is ~30 GB.
+The data directory is ~80 GB and model directory is ~30 GB (a full HF repo is larger, ~45 GB, and is also fine).
 
 # 3. Run Training
 
@@ -83,6 +94,15 @@ MI325X configuration is in `config_MI325X_1x8x1.sh`
 Both use FP8 hybrid and share the same `conf/llama3.1_8B-pretrain-fp8.yaml`; they differ only in
 platform label (and may differ in LR/batch after tuning). `PRIMUS_TRAIN_ITERS` defaults to `50`
 for a smoke-test run — raise it for full training.
+
+**Precision provenance.** The FP8 settings in the yaml are not guessed — they are taken from
+Primus' own MLPerf FP8 reference config
+[`examples/mlperf/configs/MI355X/llama3.1_8B-pretrain-FP8.yaml`](https://github.com/AMD-AGI/Primus/blob/d53c428944c3d74c41c4c96fa2c1776d7e966538/examples/mlperf/configs/MI355X/llama3.1_8B-pretrain-FP8.yaml)
+(the FP8 predecessor of AMD's FP4 submission), pinned at the same Primus commit `d53c428` the
+Dockerfile builds. Specifically:
+- `fp8: hybrid` — FP8 format; scaling recipe defaults to `delayed` (no TE-version/env gate).
+- `fp8_amax_history_len: 4` and `fp8_amax_compute_algo: "most_recent"` — MLPerf-tuned amax
+  settings, overriding the `trainer_base.yaml` defaults (`1024` / `"max"`).
 
 ```bash
 source config_MI308X_1x8x1.sh   # or: source config_MI325X_1x8x1.sh

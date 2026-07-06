@@ -102,9 +102,13 @@ modules:
       # CDNA3 (MI308X/MI325X, gfx942) has no native FP4 -> use FP8 instead of mxfp4.
       # Original MI350X/MI355X (CDNA4) config used: fp4: true / fp4_recipe: mxfp4
       # `fp8` selects the FP8 *format* (e4m3 | hybrid); recipe defaults to `delayed`
-      # (per-tensor amax history) which needs no TE-version/env gate, matching every
-      # official Primus FP8 example (e.g. examples/megatron/configs/MI300X/llama3_8B-FP8-pretrain.yaml).
-      fp8: hybrid
+      # (per-tensor amax history) which needs no TE-version/env gate.
+      # amax settings copied from Primus' own MLPerf FP8 reference config
+      # examples/mlperf/configs/MI355X/llama3.1_8B-pretrain-FP8.yaml (tuned for MLPerf convergence;
+      # differs from trainer_base defaults history_len=1024 / algo="max").
+      fp8: hybrid # e4m3, hybrid
+      fp8_amax_history_len: 4
+      fp8_amax_compute_algo: "most_recent"
       accumulate_allreduce_grads_in_fp32: false
       grad_reduce_in_bf16: true
       attention_softmax_in_fp32: false
