@@ -125,7 +125,7 @@ for _experiment_index in $(seq 1 "${NEXP}"); do
     _run_config_env=("${_base_config_env[@]}" --env=SEED="${SEED:-$RANDOM}")
     echo "launching experiment using: ${_run_config_env[*]} ${_cont_name} /workspace/code/run_and_time.sh"
     docker exec "${_run_config_env[@]}" "${_cont_name}" bash /workspace/code/run_and_time.sh
-  ) | grep --line-buffered -v "connected peer ranks" | tee "${_logfile_base}_${_experiment_index}.log"
+  ) 2>&1 | grep --line-buffered -v "connected peer ranks" | tee "${_logfile_base}_${_experiment_index}.log"
 
   if [ "${CHECK_COMPLIANCE}" -eq 1 ]; then
       docker exec "${_run_config_env[@]}" "${_cont_name}"  \

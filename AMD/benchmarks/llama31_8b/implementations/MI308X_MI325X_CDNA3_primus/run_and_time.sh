@@ -32,9 +32,18 @@ start=$(date +%s)
 start_fmt=$(date +%Y-%m-%d\ %r)
 echo "STARTING TIMING RUN AT $start_fmt"
 
-# Launch distributed training (stderr from torchrun launcher is suppressed;
-# child processes redirect their own stderr via _log_suppression.py)
-torchrun \
+# Launch distributed training. In the default (quiet) mode stderr is dropped and
+# _log_suppression.py filters stdout, matching the original submission. To see the per-iteration
+# training log (loss + throughput), run with MLPERF_VERBOSE_LOGS=1: that both skips the in-process
+# suppression (see src/_log_suppression.py) and keeps stderr here, where loguru emits the training
+# line (requires stderr_sink_level=INFO, the default in the yaml).
+if [[ "${MLPERF_VERBOSE_LOGS:-0}" == "1" ]]; then
+    _stderr_redirect=""   # keep stderr so the loss/throughput line is visible
+else
+    _stderr_redirect="2>/dev/null"
+fi
+
+eval torchrun \
     --nproc_per_node=${GPUS_PER_NODE} \
     --nnodes=${NNODES} \
     --node_rank=${NODE_RANK} \
@@ -42,7 +51,7 @@ torchrun \
     --master_port=${MASTER_PORT} \
     --rdzv_backend=c10d \
     --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
-    src/train.py 2>/dev/null
+    src/train.py ${_stderr_redirect}
 
 ret_code=$?
 

@@ -15,12 +15,22 @@ modules:
       # --- Logging Config ---
       disable_wandb: true
       disable_tensorboard: true
-      stderr_sink_level: ERROR
+      # stderr_sink_level: Primus routes logs through loguru with a sink at this level. The
+      # per-iteration training log (loss + throughput) is emitted at INFO via log_rank_last();
+      # the original MI350X submission set this to ERROR, so those INFO lines were dropped at the
+      # source (which is why loss never printed regardless of FD-level suppression). We default to
+      # INFO so the training line is actually emitted; set PRIMUS_STDERR_SINK_LEVEL=ERROR to
+      # restore the original quiet behavior.
+      stderr_sink_level: ${PRIMUS_STDERR_SINK_LEVEL:INFO}
       # log_interval: how often (in steps) to print loss + per-iteration timing/throughput.
       # The original MI350X submission set this to 9999999 (effectively silencing per-step logs
       # during the timed run). We default to 10 so loss and performance numbers are visible; set
       # PRIMUS_LOG_INTERVAL=9999999 to restore the original quiet behavior.
       log_interval: ${PRIMUS_LOG_INTERVAL:10}
+      # log_throughput: when true, the per-iteration log line additionally reports
+      # "throughput per GPU (TFLOP/s/GPU)" and "tokens per GPU (tokens/s/GPU)".
+      # Default off in Primus; we enable it so performance numbers print alongside loss.
+      log_throughput: ${PRIMUS_LOG_THROUGHPUT:true}
       log_avg_skip_iterations: 2
       log_avg_reset_interval: 50
       eval_iters: ${PRIMUS_EVAL_ITERS:32}  # 32 * GBS = 1024 eval samples

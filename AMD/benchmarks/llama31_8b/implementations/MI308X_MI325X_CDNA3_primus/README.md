@@ -58,20 +58,6 @@ bash <(curl -s https://raw.githubusercontent.com/mlcommons/r2-downloader/refs/he
 bash <(curl -s https://raw.githubusercontent.com/mlcommons/r2-downloader/refs/heads/main/mlc-r2-downloader.sh) -d model https://training.mlcommons-storage.org/metadata/llama-3-1-8b-tokenizer.uri
 ```
 
-> **No `mv` needed when you pass `-d model`.** The upstream MLProf README shows a trailing
-> `mv llama3_1_8b_tokenizer model`, but that step is a no-op (it fails, harmlessly) for the command
-> above. Reason, from the downloader source (`mlc-r2-downloader.sh`, pinned behavior): the
-> auto-subdirectory logic that would create `llama3_1_8b_tokenizer/` only runs when **no** `-d` is
-> given (`if [[ -z "$download_dir" ]]`). Passing `-d model` sets the destination explicitly and
-> skips that branch, so files land straight in `model/`. The `mv` in the upstream README is
-> inconsistent with its own `-d model` example — ignore it here.
->
-> **If you already have a full HuggingFace Llama-3.1-8B repo**, just point `MODELDIR` at it and skip
-> the tokenizer download entirely. The model uses `tokenizer_type: HuggingFaceTokenizer` and loads
-> via `AutoTokenizer.from_pretrained(MODELDIR)`, which is satisfied by the top-level
-> `tokenizer.json` / `tokenizer_config.json` / `special_tokens_map.json` / `config.json`.
-> Pretraining does not load the `*.safetensors` weights; only the tokenizer files are needed.
-
 After the download is complete, you should see files with the following naming conventions under the data directory, ending with both `.idx` and `.bin`: 
 - Training partitions: `c4-train.en_6_text_document`
 - Validation partitions: `c4-validation-91205-samples.en_text_document`
@@ -110,14 +96,46 @@ platform label (and may differ in LR/batch after tuning).
 - `PRIMUS_TRAIN_ITERS` defaults to `200` — a short performance / bring-up run (~a few minutes on
   8 GPUs). Set it to `1200000` for the full training run used by the MI350X submission (very long
   on a single 8-GPU node — it targets log perplexity 3.3), or e.g. `50` for a quick smoke test.
-- `log_interval` defaults to `10` (via `PRIMUS_LOG_INTERVAL` in the yaml), so loss and
-  per-iteration timing/throughput are printed every 10 steps. The original MI350X submission set
-  this to `9999999` to silence per-step logs during the timed run; restore that with
-  `export PRIMUS_LOG_INTERVAL=9999999` if you want the original quiet behavior.
+- `log_interval` defaults to `10` (via `PRIMUS_LOG_INTERVAL` in the yaml), so a training line is
+  printed every 10 steps. The original MI350X submission set this to `9999999` to silence per-step
+  logs during the timed run; restore that with `export PRIMUS_LOG_INTERVAL=9999999`.
+- `log_throughput` defaults to `true` (via `PRIMUS_LOG_THROUGHPUT`), which adds the TFLOP/s/GPU and
+  tokens/s/GPU fields to that line. Set `PRIMUS_LOG_THROUGHPUT=false` to drop them.
 
-Reading performance: each logged line reports `elapsed time per iteration`; throughput is
-`global_batch_size * seq_length / (seconds per iter)` = `32 * 8192 / s` tokens/s. Skip the first
-few iterations (compile + warmup) and average the steady-state ones.
+**Seeing loss and performance.** Run with `MLPERF_VERBOSE_LOGS=1` to make the per-iteration
+training line (loss + throughput) visible:
+
+```bash
+source config_MI308X_1x8x1.sh
+export MLPERF_VERBOSE_LOGS=1
+export NEXP=1
+bash run_with_docker.sh
+```
+
+Why this is needed — the original submission silenced the line two ways, and verbose mode undoes
+both:
+1. **loguru sink level.** Primus emits the training line at **INFO** via loguru, but the submission
+   set `stderr_sink_level: ERROR`, dropping it at the source. The yaml now defaults
+   `stderr_sink_level` to `INFO` (`PRIMUS_STDERR_SINK_LEVEL` to override).
+2. **stderr redirection.** In quiet mode `src/_log_suppression.py` sends stderr to `/dev/null` and
+   `run_and_time.sh` adds `2>/dev/null`; the training line goes to stderr, so it is dropped.
+   `MLPERF_VERBOSE_LOGS=1` skips the in-process suppression **and** `run_and_time.sh` keeps stderr
+   in that mode, so the line survives. (This leaves `_log_suppression.py` unchanged from upstream.)
+
+Note: verbose mode is chattier — framework INFO logs come through too; `grep` for `iteration` to
+pull just the training lines. Each looks like:
+
+```
+iteration   50/  200 | consumed samples: 1600 | elapsed time per iteration (ms): 1650.0/1650.0 | lm loss: 7.42E+00 | ... | throughput per GPU (TFLOP/s/GPU): 250.0/250.0 | tokens per GPU (tokens/s/GPU): 4950.0/4950.0 |
+```
+
+Reading throughput (fields are **per GPU**; the `a/b` form is `current/running-average`):
+- Whole-node tokens/s = `tokens/s/GPU * world_size` (e.g. `× 8`).
+- Or derive from timing: `global_batch_size * seq_length / (elapsed_time_per_iteration_s)` tokens/s for the whole node.
+- Skip the first few iterations (compile + warmup) and read the running-average column.
+
+The MLPerf logger separately records an `overall_throughput` (samples/s over the whole run) in
+`$LOGDIR/mlperf_logging.out`; multiply by `seq_length` (8192) for tokens/s.
 
 **Precision provenance.** The FP8 settings in the yaml are not guessed — they are taken from
 Primus' own MLPerf FP8 reference config
@@ -216,3 +234,35 @@ only the config label differs (`config_MI308X_1x8x1.sh` vs `config_MI325X_1x8x1.
 
 `TP=PP=CP=EP=1`, pure data-parallel over 8 GPUs (8B fits per GPU), `use_distributed_optimizer=true`
 shards optimizer state across DP. `micro_batch_size=2`, `global_batch_size=32`, `seq_length=8192`.
+
+## VRAM breakdown
+
+The estimate below suggests per-GPU usage lands comfortably under MI308X's ~192 GB with the default
+`mbs=2`, so no batch-size tuning should be needed. Treat these as rough figures — **check actual
+usage on your run** (e.g. `amd-smi monitor` / `rocm-smi`), and if a GPU approaches its limit, lower
+`PRIMUS_MICRO_BATCH_SIZE` (see the OOM note under "Notes / risks"). Rough per-GPU budget for
+8B + FP8 + `mbs=2`, `seq=8192`, DP=8:
+
+| Component | Size | Scales with | Sharded by DP? |
+|---|---|---|---|
+| Weights (BF16 working copy) | ~16 GB | param count | No (needed for local fwd/bwd) |
+| Gradients (BF16) | ~16 GB | param count | No (ZeRO-1 doesn't shard grads) |
+| Optimizer state (fp32 master + Adam m + v = 12 B/param) | 96 GB / 8 ≈ **12 GB** | param count | **Yes** — `use_distributed_optimizer` shards it across the 8 DP ranks |
+| Activations (no recompute) | ~60–70 GB | `layers × seq × hidden × mbs` | No (local to each rank) |
+| Temp buffers + fragmentation | ~15–25 GB | — | — |
+
+Note: FP8 training does **not** save VRAM here — it speeds up matmuls/comms but still keeps BF16
+master weights and adds FP8/scale copies, so total memory is roughly the same as BF16 (or slightly
+less). VRAM is dominated by activations + weights + optimizer state, not the compute precision.
+
+Key points:
+- **Optimizer state depends on parameter count, not batch size** (`8B × 12 B = 96 GB`), and is the
+  only piece ZeRO-1 shards (`/8`), because in DP all 8 ranks would otherwise hold identical copies.
+  Weights/gradients stay full-size because each rank runs a complete forward/backward locally.
+- **Activations are the big, batch-dependent term.** Training must keep every layer's forward
+  activations until backprop consumes them (unlike inference, which can reuse buffers), so memory
+  grows with `layers × seq_length × mbs`. `seq_length=8192` is what makes this large.
+- **To reduce memory** you would enable activation recomputation (`recompute_granularity: selective`),
+  trading ~30% compute to drop activations — deliberately *off* here since 192 GB fits comfortably.
+- With this much headroom, **leave `micro_batch_size=2` as-is**; only drop to 1 if a future change
+  (longer seq, larger model) pushes you toward OOM.
