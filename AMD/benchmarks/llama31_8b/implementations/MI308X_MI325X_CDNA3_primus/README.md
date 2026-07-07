@@ -149,11 +149,13 @@ Dockerfile builds. Specifically:
 **BF16 alternative.** A `conf/llama3.1_8B-pretrain-bf16.yaml` is provided for a BF16 baseline (same
 config with the fp8 keys omitted; Primus defaults to `bf16: true`). Use it when you want to compare
 numerics/throughput against FP8, or to sidestep FP8-specific issues, by overriding `EXP` after
-sourcing the config:
+sourcing the config. Also set `WARMUP_RECIPE=bf16` so the synthetic warmup matches the BF16 main
+precision (the config default is `fp8_hybrid`, tuned for the FP8 path):
 
 ```bash
 source config_MI308X_1x8x1.sh   # or: source config_MI325X_1x8x1.sh
 export EXP=/workspace/code/conf/llama3.1_8B-pretrain-bf16.yaml  # BF16 instead of FP8
+export WARMUP_RECIPE=bf16                                       # match warmup to BF16
 export MLPERF_VERBOSE_LOGS=1
 export NEXP=1
 bash run_with_docker.sh
@@ -233,8 +235,15 @@ only the config label differs (`config_MI308X_1x8x1.sh` vs `config_MI325X_1x8x1.
 
 ## Notes / risks
 
+- **`NVTE_CK_IS_V3_ATOMIC_FP32=1` is required on CDNA3.** The MI350X submission set it to `0`
+  (non-FP32 atomic accumulation in the CK v3 attention backward). On gfx942 with `seq_length=8192`
+  that overflows to Inf, so training aborts on the first step with
+  *"found Inf in local grad norm ... in backward pass"* — for both FP8 and BF16. The configs here
+  set it to `1` (the TE default). This was the root cause of the persistent NaN/Inf grad norm seen
+  during bring-up.
 - **Convergence is not guaranteed.** LR is inherited as `8e-4` (tuned for FP4); FP8 may need a
-  different value. Watch loss on a short run first.
+  different value. Watch loss on a short run first. (With the atomic-fp32 fix, a 200-step BF16 run
+  shows loss descending normally, e.g. ~15 → ~7.)
 - **VRAM.** MI308X (~192 GB) is smaller than the MI350X (288 GB) this was tuned on (see the VRAM
   breakdown below). If you hit OOM, lower
   `PRIMUS_MICRO_BATCH_SIZE` from `2` to `1` (halves activation memory; `PRIMUS_GLOBAL_BATCH_SIZE`

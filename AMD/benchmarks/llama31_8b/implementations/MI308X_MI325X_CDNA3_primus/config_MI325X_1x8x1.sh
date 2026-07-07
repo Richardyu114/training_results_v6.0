@@ -45,7 +45,11 @@ export NVTE_FUSED_ATTN_CK=1
 export NVTE_FUSED_ATTN_AOTRITON=1
 export NVTE_CK_USES_FWD_V3=1
 export NVTE_CK_USES_BWD_V3=1
-export NVTE_CK_IS_V3_ATOMIC_FP32=0
+# NVTE_CK_IS_V3_ATOMIC_FP32=1 (TE default) is REQUIRED on CDNA3 (gfx942). The MI350X submission
+# set it to 0 (non-FP32 atomic accumulation in the CK v3 attention backward), which overflows to
+# Inf on gfx942 with seq_length=8192 — training then hits "found Inf in local grad norm ... in
+# backward pass" on the first step (both FP8 and BF16). Keep it at 1 here.
+export NVTE_CK_IS_V3_ATOMIC_FP32=1
 export NVTE_USE_AITER_ROPE=1
 export NVTE_FLASH_ATTN=0
 export NVTE_FUSED_ATTN=1
