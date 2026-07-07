@@ -146,6 +146,20 @@ Dockerfile builds. Specifically:
 - `fp8_amax_history_len: 4` and `fp8_amax_compute_algo: "most_recent"` — MLPerf-tuned amax
   settings, overriding the `trainer_base.yaml` defaults (`1024` / `"max"`).
 
+**BF16 alternative.** A `conf/llama3.1_8B-pretrain-bf16.yaml` is provided for a BF16 baseline (same
+config with the fp8 keys omitted; Primus defaults to `bf16: true`). Use it when you want to compare
+numerics/throughput against FP8, or to sidestep FP8-specific issues, by overriding `EXP` after
+sourcing the config:
+
+```bash
+source config_MI308X_1x8x1.sh   # or: source config_MI325X_1x8x1.sh
+export EXP=/workspace/code/conf/llama3.1_8B-pretrain-bf16.yaml   # optional: BF16 instead of FP8
+```
+
+To debug NaN/Inf, set `check_for_nan_in_loss_and_grad: true` (and optionally
+`check_for_spiky_loss` / `check_for_large_grads`) in the yaml — training then aborts and reports
+where the first NaN/Inf appears (loss vs grad) instead of silently continuing.
+
 ```bash
 source config_MI308X_1x8x1.sh   # or: source config_MI325X_1x8x1.sh
 ```
