@@ -106,7 +106,7 @@ platform label (and may differ in LR/batch after tuning).
 training line (loss + throughput) visible:
 
 ```bash
-source config_MI308X_1x8x1.sh
+source config_MI308X_1x8x1.sh # or: source config_MI325X_1x8x1.sh
 export MLPERF_VERBOSE_LOGS=1
 export NEXP=1
 bash run_with_docker.sh
@@ -153,16 +153,15 @@ sourcing the config:
 
 ```bash
 source config_MI308X_1x8x1.sh   # or: source config_MI325X_1x8x1.sh
-export EXP=/workspace/code/conf/llama3.1_8B-pretrain-bf16.yaml   # optional: BF16 instead of FP8
+export EXP=/workspace/code/conf/llama3.1_8B-pretrain-bf16.yaml  # BF16 instead of FP8
+export MLPERF_VERBOSE_LOGS=1
+export NEXP=1
+bash run_with_docker.sh
 ```
 
 To debug NaN/Inf, set `check_for_nan_in_loss_and_grad: true` (and optionally
 `check_for_spiky_loss` / `check_for_large_grads`) in the yaml — training then aborts and reports
 where the first NaN/Inf appears (loss vs grad) instead of silently continuing.
-
-```bash
-source config_MI308X_1x8x1.sh   # or: source config_MI325X_1x8x1.sh
-```
 
 ### Launch 1 Training Run
 If you want to perform a single run, use:
@@ -236,10 +235,11 @@ only the config label differs (`config_MI308X_1x8x1.sh` vs `config_MI325X_1x8x1.
 
 - **Convergence is not guaranteed.** LR is inherited as `8e-4` (tuned for FP4); FP8 may need a
   different value. Watch loss on a short run first.
-- **VRAM.** MI308X (~192 GB) is smaller than the MI350X (288 GB) this was tuned on, and FP8 keeps
-  more activation copies than FP4. If you hit OOM, lower `PRIMUS_MICRO_BATCH_SIZE` from `2` to `1`
-  (halves activation memory; `PRIMUS_GLOBAL_BATCH_SIZE` stays `32`, so convergence is unaffected —
-  grad-accumulation just goes 2 → 4). Do **not** change `PRIMUS_GLOBAL_BATCH_SIZE`.
+- **VRAM.** MI308X (~192 GB) is smaller than the MI350X (288 GB) this was tuned on (see the VRAM
+  breakdown below). If you hit OOM, lower
+  `PRIMUS_MICRO_BATCH_SIZE` from `2` to `1` (halves activation memory; `PRIMUS_GLOBAL_BATCH_SIZE`
+  stays `32`, so convergence is unaffected — grad-accumulation just goes 2 → 4). Do **not** change
+  `PRIMUS_GLOBAL_BATCH_SIZE`.
 - **mxfp8 recipe** (if ever tried) requires `NVTE_ROCM_ENABLE_MXFP8=1` and TE ≥ 2.1; the default
   `delayed` recipe used here has no such gate.
 - **Not a valid MLPerf closed submission** — precision differs from the ruleset.
