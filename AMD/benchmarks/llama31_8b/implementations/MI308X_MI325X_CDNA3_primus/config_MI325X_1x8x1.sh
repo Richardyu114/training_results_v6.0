@@ -20,7 +20,10 @@ export PRIMUS_MICRO_BATCH_SIZE=2
 export PRIMUS_GLOBAL_BATCH_SIZE=32
 export PRIMUS_LR=8e-4
 export PRIMUS_MIN_LR=8e-5
-export PRIMUS_TRAIN_ITERS=1200000          # full training (same as the MI350X submission); lower for a smoke test
+# PRIMUS_TRAIN_ITERS: number of training steps. The MI350X submission uses 1200000 (full run to the
+# target perplexity). We default to 200 for a short performance/enablement run (~a few minutes on
+# 8 GPUs); set to 1200000 for full training, or e.g. 50 for a quick smoke test.
+export PRIMUS_TRAIN_ITERS=200
 export PRIMUS_LR_WARMUP_ITERS=64
 export EVAL_SAMPLES_INTERVAL=12288
 export PRIMUS_EVAL_INTERVAL=$((EVAL_SAMPLES_INTERVAL / PRIMUS_GLOBAL_BATCH_SIZE))  # Auto-computed

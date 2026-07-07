@@ -104,9 +104,20 @@ MI308X configuration is in `config_MI308X_1x8x1.sh`\
 MI325X configuration is in `config_MI325X_1x8x1.sh`
 
 Both use FP8 hybrid and share the same `conf/llama3.1_8B-pretrain-fp8.yaml`; they differ only in
-platform label (and may differ in LR/batch after tuning). `PRIMUS_TRAIN_ITERS` defaults to
-`1200000` (full training, same as the MI350X submission); lower it (e.g. `50`) for a quick smoke
-test. Note that a full run to the target log perplexity of 3.3 is very long on a single 8-GPU node.
+platform label (and may differ in LR/batch after tuning).
+
+**Run length and logging (defaults tuned for enablement, not a full submission).**
+- `PRIMUS_TRAIN_ITERS` defaults to `200` — a short performance / bring-up run (~a few minutes on
+  8 GPUs). Set it to `1200000` for the full training run used by the MI350X submission (very long
+  on a single 8-GPU node — it targets log perplexity 3.3), or e.g. `50` for a quick smoke test.
+- `log_interval` defaults to `10` (via `PRIMUS_LOG_INTERVAL` in the yaml), so loss and
+  per-iteration timing/throughput are printed every 10 steps. The original MI350X submission set
+  this to `9999999` to silence per-step logs during the timed run; restore that with
+  `export PRIMUS_LOG_INTERVAL=9999999` if you want the original quiet behavior.
+
+Reading performance: each logged line reports `elapsed time per iteration`; throughput is
+`global_batch_size * seq_length / (seconds per iter)` = `32 * 8192 / s` tokens/s. Skip the first
+few iterations (compile + warmup) and average the steady-state ones.
 
 **Precision provenance.** The FP8 settings in the yaml are not guessed — they are taken from
 Primus' own MLPerf FP8 reference config

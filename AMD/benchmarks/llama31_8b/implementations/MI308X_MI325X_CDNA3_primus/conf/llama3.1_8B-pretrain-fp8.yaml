@@ -16,7 +16,11 @@ modules:
       disable_wandb: true
       disable_tensorboard: true
       stderr_sink_level: ERROR
-      log_interval: 9999999
+      # log_interval: how often (in steps) to print loss + per-iteration timing/throughput.
+      # The original MI350X submission set this to 9999999 (effectively silencing per-step logs
+      # during the timed run). We default to 10 so loss and performance numbers are visible; set
+      # PRIMUS_LOG_INTERVAL=9999999 to restore the original quiet behavior.
+      log_interval: ${PRIMUS_LOG_INTERVAL:10}
       log_avg_skip_iterations: 2
       log_avg_reset_interval: 50
       eval_iters: ${PRIMUS_EVAL_ITERS:32}  # 32 * GBS = 1024 eval samples
