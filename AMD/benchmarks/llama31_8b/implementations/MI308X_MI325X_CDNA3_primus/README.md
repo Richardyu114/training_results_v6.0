@@ -104,8 +104,9 @@ MI308X configuration is in `config_MI308X_1x8x1.sh`\
 MI325X configuration is in `config_MI325X_1x8x1.sh`
 
 Both use FP8 hybrid and share the same `conf/llama3.1_8B-pretrain-fp8.yaml`; they differ only in
-platform label (and may differ in LR/batch after tuning). `PRIMUS_TRAIN_ITERS` defaults to `50`
-for a smoke-test run — raise it for full training.
+platform label (and may differ in LR/batch after tuning). `PRIMUS_TRAIN_ITERS` defaults to
+`1200000` (full training, same as the MI350X submission); lower it (e.g. `50`) for a quick smoke
+test. Note that a full run to the target log perplexity of 3.3 is very long on a single 8-GPU node.
 
 **Precision provenance.** The FP8 settings in the yaml are not guessed — they are taken from
 Primus' own MLPerf FP8 reference config
