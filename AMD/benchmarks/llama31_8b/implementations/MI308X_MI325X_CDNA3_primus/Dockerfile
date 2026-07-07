@@ -2,10 +2,25 @@ ARG BASE_IMAGE=docker.io/rocm/primus:v26.2
 FROM ${BASE_IMAGE}
 
 # GPU architectures to compile kernels for. Default keeps both (CDNA4 + CDNA3) as upstream.
-# For MI308X/MI325X (both gfx942) you can build for CDNA3 only to roughly halve TE/AITER
-# build time:
+# For MI308X/MI325X (both gfx942) build for CDNA3 only to roughly halve TE/AITER build time:
 #   docker build --build-arg GPU_ARCHS="gfx942" ...
+# (CMake treats ";" as a native list separator and TE's rocm_utils.cmake also accepts ",".)
 ARG GPU_ARCHS="gfx950;gfx942"
+
+# Fail loudly if GPU_ARCHS ends up empty: an empty NVTE_ROCM_ARCH makes TE's cmake set an empty
+# CMAKE_HIP_ARCHITECTURES, which silently falls back to "native" (build-host detection) and skips
+# the aiter v3 asm attention kernels. This RUN echoes the resolved value and aborts on empty.
+RUN echo "GPU_ARCHS=[${GPU_ARCHS}]" && test -n "${GPU_ARCHS}" || \
+    (echo "ERROR: GPU_ARCHS is empty; pass --build-arg GPU_ARCHS=gfx942 (or gfx950;gfx942)" && false)
+
+# Export the arch as ENV (not just an inline var on the build RUN). TE's build runs
+# pip -> setup.py -> subprocess -> cmake, and the cmake step reads $ENV{NVTE_ROCM_ARCH}; an inline
+# var did not reliably reach that nested cmake process, leaving CMAKE_HIP_ARCHITECTURES empty ->
+# "native". Setting it as ENV mirrors TE's own wheel Dockerfile (ENV NVTE_ROCM_ARCH=...) and
+# guarantees every child process sees it.
+ENV NVTE_ROCM_ARCH="${GPU_ARCHS}"
+ENV PYTORCH_ROCM_ARCH="${GPU_ARCHS}"
+ENV GPU_ARCHS="${GPU_ARCHS}"
 
 # Install library dependencies
 WORKDIR /workspace
@@ -23,9 +38,8 @@ RUN git clone --recursive https://github.com/ROCm/TransformerEngine.git \
 
 RUN cd TransformerEngine \
     && NVTE_PROJECT_BUILDING=1 NVTE_USE_ROCM=1 NVTE_FUSED_ATTN_AOTRITON=0 \
-    NVTE_ROCM_ARCH="${GPU_ARCHS}" GPU_ARCHS="${GPU_ARCHS}" \
     NVTE_FRAMEWORK='pytorch' \
-    NVTE_USE_HIPBLASLT=1 MAX_JOBS=128 PYTORCH_ROCM_ARCH="${GPU_ARCHS}" CU_NUM=304 \
+    NVTE_USE_HIPBLASLT=1 MAX_JOBS=128 CU_NUM=304 \
     pip install --no-build-isolation -e . -v \
     && rm -rf /root/.cache
 
