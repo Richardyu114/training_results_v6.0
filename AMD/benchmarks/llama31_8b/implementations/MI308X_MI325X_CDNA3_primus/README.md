@@ -155,6 +155,9 @@ precision (the config default is `fp8_hybrid`, tuned for the FP8 path):
 ```bash
 source config_MI308X_1x8x1.sh   # or: source config_MI325X_1x8x1.sh
 export EXP=/workspace/code/conf/llama3.1_8B-pretrain-bf16.yaml  # BF16 instead of FP8
+# WARMUP_RECIPE=bf16 means "no FP8/FP4 autocast in warmup" (warmup follows the model's native
+# precision), overriding the config default of fp8_hybrid. Equivalent to WARMUP_RECIPE="" / unset,
+# but the config already sets fp8_hybrid, so it must be explicitly overridden here.
 export WARMUP_RECIPE=bf16                                       # match warmup to BF16
 export MLPERF_VERBOSE_LOGS=1
 export NEXP=1
