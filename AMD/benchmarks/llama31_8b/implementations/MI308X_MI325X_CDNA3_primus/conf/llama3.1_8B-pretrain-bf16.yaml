@@ -125,9 +125,25 @@ modules:
 
 
       # --- Primus Turbo Config ---
+      # Primus-Turbo swaps Megatron's default TE/CK operators for Turbo's own kernels via patching.
+      # On this dense llama3.1-8B run (TP=1, DP=8) use_turbo_parallel_linear does NOT do TP comm
+      # overlap (there is no TP comm to overlap) — it simply replaces the linear GEMM (TE/hipBLASLt)
+      # with Turbo's BF16 GEMM kernel. Worth A/B-testing purely as a GEMM-kernel swap.
+      #
+      # IMPORTANT: these MUST be bare yaml booleans, NOT ${ENV:default} placeholders. Primus'
+      # yaml_loader resolves ${VAR:false} to the *string* "false" (it only coerces int/float, never
+      # bool), and a non-empty string is truthy -> the switch turns ON regardless of the env value.
+      # That bug silently enabled turbo attention and OOM'd MI308. Edit these lines directly to A/B:
+      #   baseline : all three false                      -> all TE/CK
+      #   +linear  : enable_primus_turbo + use_turbo_parallel_linear = true; attention stays false
+      #   +attn    : additionally use_turbo_attention: true (watch loss: bypasses the CK path and
+      #              our NVTE_CK_IS_V3_ATOMIC_FP32=1 fix; also raises peak memory)
+      # grouped_mlp / fused_router are MoE-only -> keep false for this dense model.
+      # BF16 only: Turbo linear/attention FP8 needs current/block/mxfp8 scaling, NOT delayed (our
+      # fp8 recipe) -> do not enable Turbo on the fp8 config.
       enable_primus_turbo: false
       use_turbo_attention: false
-      use_turbo_parallel_linear: false              # can't use together with delayed recipe
+      use_turbo_parallel_linear: false
       use_turbo_grouped_mlp: false
       moe_use_fused_router_with_aux_score: false
       enable_turbo_attention_float8 : false

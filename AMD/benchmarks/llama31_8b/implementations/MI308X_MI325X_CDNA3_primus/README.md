@@ -85,35 +85,43 @@ export CONT=rocm/amd-mlperf:llama31_8b_training_6.0
 
 ### Set Configuration
 
-Set appropriate configuration and system-specific hyperparameters:\
-MI308X configuration is in `config_MI308X_1x8x1.sh`\
-MI325X configuration is in `config_MI325X_1x8x1.sh`
-
-Both use FP8 hybrid and share the same `conf/llama3.1_8B-pretrain-fp8.yaml`; they differ only in
-platform label (and may differ in LR/batch after tuning).
-
-**Run length and logging (defaults tuned for enablement, not a full submission).**
-- `PRIMUS_TRAIN_ITERS` defaults to `200` — a short performance / bring-up run (~a few minutes on
-  8 GPUs). Set it to `1200000` for the full training run used by the MI350X submission (very long
-  on a single 8-GPU node — it targets log perplexity 3.3), or e.g. `50` for a quick smoke test.
-- `log_interval` defaults to `10` (via `PRIMUS_LOG_INTERVAL` in the yaml), so a training line is
-  printed every 10 steps. The original MI350X submission set this to `9999999` to silence per-step
-  logs during the timed run; restore that with `export PRIMUS_LOG_INTERVAL=9999999`.
-- `log_throughput` defaults to `true` (via `PRIMUS_LOG_THROUGHPUT`), which adds the TFLOP/s/GPU and
-  tokens/s/GPU fields to that line. Set `PRIMUS_LOG_THROUGHPUT=false` to drop them.
-
-**Seeing loss and performance.** Run with `MLPERF_VERBOSE_LOGS=1` to make the per-iteration
-training line (loss + throughput) visible:
+Configuration is in `config_MI308X_1x8x1.sh` / `config_MI325X_1x8x1.sh` (both use FP8 hybrid and
+share `conf/llama3.1_8B-pretrain-fp8.yaml`; they differ only in platform label). Default run:
 
 ```bash
 source config_MI308X_1x8x1.sh # or: source config_MI325X_1x8x1.sh
 export MLPERF_VERBOSE_LOGS=1
+# For a FULL "train to target quality" run (eval log-perplexity <= 3.3), raise the step cap AND
+# lower the learning rate (see note below — needed for both FP8 and BF16 on CDNA3):
+#   export PRIMUS_TRAIN_ITERS=1200000
+#   export PRIMUS_LR=3e-4          # the FP4 default 8e-4 diverges on CDNA3 (see below)
+#   export PRIMUS_MIN_LR=3e-5      # keep ~10% of PRIMUS_LR
+# TARGET_EVAL_LOSS=3.3 (already set in the config) stops training early once eval hits the target,
+# so it ends with run_stop status "success" rather than "aborted". Reference: the official MI350X
+# FP4 submission reaches the target in ~6k steps / ~1.8h.
+# The default 200 above is only a short bring-up run. Consider running it in the background:
+#   nohup bash run_with_docker.sh > full_run.log 2>&1 &
 export NEXP=1
 bash run_with_docker.sh
 ```
 
-Why this is needed — the original submission silenced the line two ways, and verbose mode undoes
-both:
+**Defaults (tuned for enablement, not a full submission).**
+- `PRIMUS_TRAIN_ITERS` defaults to `200` — a short bring-up run. Set `1200000` for full training
+  (train-to-target, log perplexity 3.3), or `50` for a quick smoke test.
+- `log_interval=10` / `log_throughput=true` (via `PRIMUS_LOG_INTERVAL` / `PRIMUS_LOG_THROUGHPUT`) —
+  print a loss + TFLOP/s/GPU + tokens/s/GPU line every 10 steps. The submission used `9999999`
+  (silent); restore with `export PRIMUS_LOG_INTERVAL=9999999`.
+- `MLPERF_VERBOSE_LOGS=1` — required to actually surface that line (see "why" below).
+
+> **Learning rate (important — applies to both FP8 and BF16).** The config default `PRIMUS_LR=8e-4`
+> is inherited from the FP4 submission and **diverges on CDNA3** for both precisions: after warmup
+> loss drops then rebounds with grad norm exploding into the hundreds+ (FP8 around step ~400, BF16
+> later around step ~1000). Use `PRIMUS_LR=3e-4` (`PRIMUS_MIN_LR=3e-5`) for full training — verified
+> stable (loss descends past 4.0, grad norm <1). `8e-4` only survives the short 200-step bring-up
+> because it stops before the divergence onset.
+
+**Why `MLPERF_VERBOSE_LOGS=1` is needed** — the original submission silenced the training line two
+ways, and verbose mode undoes both:
 1. **loguru sink level.** Primus emits the training line at **INFO** via loguru, but the submission
    set `stderr_sink_level: ERROR`, dropping it at the source. The yaml now defaults
    `stderr_sink_level` to `INFO` (`PRIMUS_STDERR_SINK_LEVEL` to override).
@@ -160,6 +168,10 @@ export EXP=/workspace/code/conf/llama3.1_8B-pretrain-bf16.yaml  # BF16 instead o
 # but the config already sets fp8_hybrid, so it must be explicitly overridden here.
 export WARMUP_RECIPE=bf16                                       # match warmup to BF16
 export MLPERF_VERBOSE_LOGS=1
+# For a FULL train-to-target run, raise the step cap AND lower the LR (BF16 also diverges at 8e-4):
+#   export PRIMUS_TRAIN_ITERS=1200000
+#   export PRIMUS_LR=3e-4                 # 8e-4 diverges on CDNA3 (BF16 ~step 1000); TARGET_EVAL_LOSS=3.3 stops early on success
+#   export PRIMUS_MIN_LR=3e-5
 export NEXP=1
 bash run_with_docker.sh
 ```
@@ -238,15 +250,20 @@ only the config label differs (`config_MI308X_1x8x1.sh` vs `config_MI325X_1x8x1.
 
 ## Notes / risks
 
-- **`NVTE_CK_IS_V3_ATOMIC_FP32=1` is required on CDNA3.** The MI350X submission set it to `0`
-  (non-FP32 atomic accumulation in the CK v3 attention backward). On gfx942 with `seq_length=8192`
-  that overflows to Inf, so training aborts on the first step with
-  *"found Inf in local grad norm ... in backward pass"* — for both FP8 and BF16. The configs here
-  set it to `1` (the TE default). This was the root cause of the persistent NaN/Inf grad norm seen
-  during bring-up.
-- **Convergence is not guaranteed.** LR is inherited as `8e-4` (tuned for FP4); FP8 may need a
-  different value. Watch loss on a short run first. (With the atomic-fp32 fix, a 200-step BF16 run
-  shows loss descending normally, e.g. ~15 → ~7.)
+- **`NVTE_CK_IS_V3_ATOMIC_FP32=1` is required on CDNA3.** This flag controls the accumulation
+  precision of the **dQ atomic reduction** in the CK flash-attn v3 backward: `1` (TE default)
+  accumulates in FP32 (extra `convert_dq` kernel), `0` uses bf16/fp16 atomics without it
+  ([ROCm/TransformerEngine README, "AITER FA v3 Kernels"](https://github.com/ROCm/TransformerEngine)).
+  The MI350X submission set `0`. With `seq_length=8192`, each Q tile is atomically accumulated over
+  many K/V tiles; bf16's narrow range **overflows to Inf** during that sum on gfx942, aborting
+  training on step 1 (*"found Inf in local grad norm ... in backward pass"*, both FP8 and BF16).
+  Restoring `1` fixes it at a small cost (the extra convert_dq kernel). This was the root cause of
+  the persistent NaN/Inf grad norm during bring-up.
+- **Learning rate — lower it for long runs (FP8 and BF16).** The config default `8e-4` (from the FP4
+  submission) <b>diverges on CDNA3</b> for both precisions: loss bottoms then rebounds with grad norm
+  exploding into the hundreds+ (FP8 ~step 400, BF16 ~step 1000). Use <code>PRIMUS_LR=3e-4</code>
+  (<code>PRIMUS_MIN_LR=3e-5</code>) for full training — verified stable. The 200-step bring-up runs
+  fine at 8e-4 only because it stops before the divergence onset.
 - **VRAM.** MI308X (~192 GB) is smaller than the MI350X (288 GB) this was tuned on (see the VRAM
   breakdown below). If you hit OOM, lower
   `PRIMUS_MICRO_BATCH_SIZE` from `2` to `1` (halves activation memory; `PRIMUS_GLOBAL_BATCH_SIZE`
