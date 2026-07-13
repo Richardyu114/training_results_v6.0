@@ -16,10 +16,31 @@ if [[ -n "${SLURM_NNODES:-}" && "${SLURM_NNODES}" -gt 1 ]]; then
     NODE_RANK="${SLURM_NODEID:-0}"
 fi
 
+# Keep MLLOG precision metadata aligned with the final experiment override.
+# Platform configs default to FP8, but launchers may replace EXP with the BF16
+# yaml after sourcing the config. The yaml remains the runtime source of truth.
+: "${EXP:?EXP not set}"
+if [[ ! -r "${EXP}" ]]; then
+    echo "ERROR: experiment config is not readable: ${EXP}" >&2
+    exit 2
+fi
+if grep -Eq '^[[:space:]]*fp8:[[:space:]]*(hybrid|e4m3)([[:space:]]|#|$)' "${EXP}"; then
+    _training_precision=fp8
+    export FP8=true
+elif [[ "${EXP##*/}" == *bf16*.yaml ]]; then
+    _training_precision=bf16
+    export FP8=false
+else
+    echo "ERROR: cannot determine training precision from EXP=${EXP}" >&2
+    exit 2
+fi
+export MLLOG_LOWEST_NUMERICAL_PRECISION_LINEAR="${_training_precision}"
+
 echo "============================================"
 echo "MLPerf LLama3.1 8B Training"
 echo "============================================"
 echo "Config: ${EXP}"
+echo "Precision: ${_training_precision}"
 echo "Data:   ${DATA_PATH}"
 echo "GPUs:   ${GPUS_PER_NODE}"
 echo "Nodes:  ${NNODES}"
@@ -43,15 +64,31 @@ else
     _stderr_redirect="2>/dev/null"
 fi
 
-eval torchrun \
-    --nproc_per_node=${GPUS_PER_NODE} \
-    --nnodes=${NNODES} \
-    --node_rank=${NODE_RANK} \
-    --master_addr=${MASTER_ADDR} \
-    --master_port=${MASTER_PORT} \
-    --rdzv_backend=c10d \
-    --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
-    src/train.py ${_stderr_redirect}
+# Rendezvous mode. For multi-node we MUST use the static backend (--master_addr/--master_port
+# + --node_rank): rank0 binds+listens on MASTER_ADDR directly, which works with a plain IP.
+# The c10d backend instead picks the master by matching a node's `hostname` output against the
+# rdzv_endpoint host; with an IP endpoint no node matches, so nobody starts the store and every
+# rank times out on TCPStore connect. Mixing both styles also makes c10d silently ignore
+# master_addr/port. Single-node keeps the original c10d line (localhost matches, works fine).
+if [[ "${NNODES}" -gt 1 ]]; then
+    eval torchrun \
+        --nproc_per_node=${GPUS_PER_NODE} \
+        --nnodes=${NNODES} \
+        --node_rank=${NODE_RANK} \
+        --master_addr=${MASTER_ADDR} \
+        --master_port=${MASTER_PORT} \
+        src/train.py ${_stderr_redirect}
+else
+    eval torchrun \
+        --nproc_per_node=${GPUS_PER_NODE} \
+        --nnodes=${NNODES} \
+        --node_rank=${NODE_RANK} \
+        --master_addr=${MASTER_ADDR} \
+        --master_port=${MASTER_PORT} \
+        --rdzv_backend=c10d \
+        --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
+        src/train.py ${_stderr_redirect}
+fi
 
 ret_code=$?
 

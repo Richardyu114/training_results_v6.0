@@ -198,6 +198,13 @@ After completion, the logs will be available under the directory `$LOGDIR`.
 
 Note:To optimize the machine's performance, the training script will also execute `runtime_tunables.sh` script before any training run.
 
+### Multi-node (2×8 = 16 GPU) [Optional]
+
+The steps above are single-node (8 GPU). For an optional **two-node** run (no SLURM required),
+use `config_MI308X_2x8x1.sh` + `run_with_docker_2node.sh`. Cross-node NCCL/RoCE settings are
+auto-detected, so nothing cluster-specific is hardcoded. See **[MULTINODE.md](MULTINODE.md)** for
+the prerequisites, launch options, network configuration, and failure-handling behavior.
+
 
 # 4. Check Quality
 ### Quality metric

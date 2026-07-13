@@ -19,6 +19,7 @@ set -euxo pipefail
 # Change directory to the primus directory
 SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
 cd "$SCRIPT_DIR"
+source "${SCRIPT_DIR}/bnxt_rdma_overlay.sh"
 
 # Vars without defaults
 : "${DGXSYSTEM:?DGXSYSTEM not set}"
@@ -47,6 +48,8 @@ readonly _logfile_base="${LOGDIR}/${DATESTAMP}"
 readonly _cont_name="${CONT_NAME}"
 _cont_mounts=("--volume=${DATADIR}:/data" "--volume=${MODELDIR}:/model" "--volume=$(pwd):/workspace/code" "--volume=${LOGDIR}:/results")
 
+bnxt_rdma_prepare _cont_mounts "${DGXSYSTEM}" "${NNODES:-1}" "${CONT}"
+
 
 # Setup directories
 mkdir -p "${LOGDIR}"
@@ -65,6 +68,20 @@ _config_env+=(GEMM_OFFLINE_TUNING)
 _config_env+=(GEMM_USE_TUNING_RESULTS)
 _config_env+=(HF_TOKEN)
 _config_env+=(SEED)
+
+# Forward caller-only distributed overrides on multi-node runs.
+if (( ${NNODES:-1} > 1 )); then
+    mapfile -t _runtime_dist_env < <(
+        compgen -e \
+            | grep -E '^(NCCL_|TORCH_NCCL_|GLOO_|TORCH_DISTRIBUTED_DEBUG$)' \
+            | sort -u \
+            || true
+    )
+    _config_env+=("${_runtime_dist_env[@]}")
+    mapfile -t _config_env < <(
+        printf '%s\n' "${_config_env[@]}" | awk 'NF && !seen[$0]++'
+    )
+fi
 
 echo "${_config_env[@]}"
 mapfile -t _config_env < <(for v in "${_config_env[@]}"; do echo "--env=$v"; done)
