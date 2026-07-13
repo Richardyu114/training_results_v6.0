@@ -1,11 +1,12 @@
-# Two-Node MI308X Llama 3.1 8B Training (16 GPUs)
+# Two-Node CDNA3 Llama 3.1 8B Training (16 GPUs)
 
 This guide describes the scheduler-free, two-node launch path for the Llama 3.1 8B
-implementation. The provided configuration uses two MI308X nodes with eight GPUs per node and
-starts one `torchrun` launcher locally on node0 and another over SSH on node1.
+implementation. It uses two homogeneous, supported CDNA3 nodes with eight GPUs per node and starts
+one `torchrun` launcher locally on node0 and another over SSH on node1. The platform is selected
+explicitly through `DGXSYSTEM_2N`; the launcher has no hardware-specific default.
 
-Complete the image, dataset, and tokenizer setup in [README.md](README.md) before using this
-launcher.
+Complete the image, dataset, and tokenizer setup in the [implementation README](../README.md)
+before using this launcher.
 
 The CDNA3 FP8 configuration is provided for functional enablement. It is not an MLPerf closed
 submission configuration because its numerical format differs from the submitted recipe.
@@ -22,11 +23,20 @@ submission configuration because its numerical format differs from the submitted
 | Global batch size | 64 |
 | Gradient accumulation | 2 |
 
+Select one of the platform configurations before launch:
+
+| Platform | `DGXSYSTEM_2N` | Status |
+|---|---|---|
+| MI308X | `MI308X_2x8x1` | Validated with BF16 and FP8 50-step runs |
+| MI325X | `MI325X_2x8x1` | gfx942 baseline; pending MI325X two-node hardware validation |
+
 The multi-node path consists of:
 
-- `config_MI308X_2x8x1.sh`: model, batch, and network configuration;
+- `config_MI308X_2x8x1.sh` / `config_MI325X_2x8x1.sh`: platform selectors;
+- `config_common_2x8x1.sh`: shared two-node batch and network overlay on each platform's
+  single-node configuration;
 - `run_with_docker_2node.sh`: node0 launcher and node1 SSH coordination;
-- `run_with_docker.sh`: per-node training container launcher;
+- `../run_with_docker.sh`: shared per-node training container launcher;
 - `bnxt_rdma_overlay.sh`: optional Broadcom RDMA userspace-library discovery and mounts.
 
 Multi-node jobs use torchrun's static rendezvous. Node 0 hosts the rendezvous endpoint at
@@ -34,7 +44,8 @@ Multi-node jobs use torchrun's static rendezvous. Node 0 hosts the rendezvous en
 
 ## Prerequisites
 
-- Two MI308X nodes, each with eight available GPUs.
+- Two homogeneous nodes matching one of the supported platform configurations, each with eight
+  available GPUs.
 - The same training image and tag on both nodes.
 - Bash 5.1 or newer on node0 and Bash 4.3 or newer as the remote login shell on node1.
 - Passwordless SSH from node0 to node1.
@@ -58,7 +69,7 @@ not by the launcher container.
 Before launching, verify node1 access from node0:
 
 ```bash
-export NODE1_IP=10.0.0.11       # replace with the node1 address
+export NODE1_IP=192.0.2.11      # documentation address; replace with the node1 address
 export SSH_USER=training        # replace with the node1 login user
 export SSH_PORT=22
 
@@ -73,9 +84,15 @@ Run the launcher from node0:
 ```bash
 cd /path/to/MI308X_MI325X_CDNA3_primus
 
+# Platform: uncomment exactly one supported SYSTEM entry from the table above.
+# export SYSTEM=MI308X
+# export SYSTEM=MI325X
+: "${SYSTEM:?select a supported SYSTEM}"
+export DGXSYSTEM_2N="${SYSTEM}_2x8x1"
+
 # Network topology
-export NODE0_IP=10.0.0.10       # address reachable from node1
-export NODE1_IP=10.0.0.11
+export NODE0_IP=192.0.2.10      # documentation address; replace with the node0 address
+export NODE1_IP=192.0.2.11      # documentation address; replace with the node1 address
 export SSH_USER=training
 export SSH_PORT=22
 export MASTER_PORT=29502
@@ -94,8 +111,12 @@ export PRIMUS_LR=3e-4
 export PRIMUS_MIN_LR=3e-5
 export MLPERF_VERBOSE_LOGS=1
 
-bash run_with_docker_2node.sh
+bash 2nodes/run_with_docker_2node.sh
 ```
+
+Each platform wrapper inherits its matching `../config_<SYSTEM>_1x8x1.sh` and applies only the
+shared two-node delta. On the first run on a new platform, confirm the `[config]` and `[rdma]` lines
+in both node logs select the expected socket NIC, HCA list, GID index, and host-matched provider.
 
 The launcher defaults to 50 iterations. For longer training, set `PRIMUS_TRAIN_ITERS` explicitly
 and use the learning-rate schedule validated for the selected numerical recipe. The global batch
@@ -115,8 +136,8 @@ export WARMUP_RECIPE=bf16
 | `SSH_USER` | `root` | Node1 login user |
 | `SSH_PORT` | `22` | Node1 SSH port |
 | `MASTER_PORT` | `29502` | Torchrun rendezvous port on node0 |
-| `REPO_DIR` | launcher directory | Repository path shared by both nodes |
-| `DGXSYSTEM_2N` | `MI308X_2x8x1` | Configuration filename suffix |
+| `REPO_DIR` | implementation root | Repository path shared by both nodes |
+| `DGXSYSTEM_2N` | required | Configuration filename suffix selected from the platform table |
 | `PRIMUS_TRAIN_ITERS` | `50` | Per-run iteration cap |
 | `MLPERF_VERBOSE_LOGS` | `1` | Enable per-iteration training output |
 | `CLEAR_CACHES` | `1` | Drop host page cache before each experiment |
@@ -127,27 +148,31 @@ export WARMUP_RECIPE=bf16
 
 ## Network configuration
 
-`config_MI308X_2x8x1.sh` is sourced independently on each node and selects the following values:
+The selected `config_*_2x8x1.sh` is sourced independently on each node and selects the following
+values:
 
 | Variable | Default selection |
 |---|---|
-| `NCCL_SOCKET_IFNAME` | Interface carrying the default route |
+| `NCCL_SOCKET_IFNAME` | Interface carrying the default route (`iproute2` or `/proc/net/route`) |
 | `GLOO_SOCKET_IFNAME` | Same interface as `NCCL_SOCKET_IFNAME` |
-| `NCCL_IB_HCA` | `bnxt_re*`, then `mlx5*`, then any InfiniBand device |
+| `NCCL_IB_HCA` | Broadcom PCI vendor `0x14e4`, then `mlx5*`, then any InfiniBand device |
 | `NCCL_IB_GID_INDEX` | RoCE v2 entry on the first detected HCA; fallback `3` |
 | `NCCL_NET_GDR_LEVEL` | `3` |
 
 These variables can be exported before starting the launcher. A caller override is applied to both
 nodes, so an interface name, HCA name, or GID index must be valid on both systems.
 When node-local names differ, leave the variable unset and use per-node auto-detection.
+If a node has no default route, set both `NCCL_SOCKET_IFNAME` and `GLOO_SOCKET_IFNAME` explicitly;
+the configuration fails early rather than guessing an arbitrary UP interface.
 
 Set `NCCL_DEBUG=INFO` for communication diagnostics. Set `NCCL_IB_DISABLE=1` only for a
 socket-transport diagnostic; it also disables the Broadcom userspace overlay described below.
 
 ## Broadcom RDMA userspace overlay
 
-On AMD multi-node systems with `bnxt_re` devices, `run_with_docker.sh` automatically calls
-`bnxt_rdma_overlay.sh`. The helper inspects the Docker daemon host and selects a unique
+On AMD multi-node systems with a Broadcom RDMA device, `run_with_docker.sh` automatically calls
+`bnxt_rdma_overlay.sh`. The helper identifies the HCA by PCI vendor ID, so names such as
+`bnxt_re0` and `rdma0` are both supported. It inspects the Docker daemon host and selects a unique
 `libibverbs.so.1` and `libbnxt_re-rdmavN.so` pair that matches the running `bnxt_re` kernel module
 and private ABI. It then mounts those libraries read-only into the training container.
 
@@ -165,7 +190,7 @@ export BNXT_RDMA_PROVIDER_HOST_PATH=/usr/local/lib/libbnxt_re-rdmav34.so
 
 ## Logs and failure handling
 
-The launcher writes two per-node execution logs in the script directory unless `LOG_PREFIX`
+The launcher writes two per-node execution logs in the implementation root unless `LOG_PREFIX`
 contains another path:
 
 - `${LOG_PREFIX}_${RUN_ID}_node0.log`

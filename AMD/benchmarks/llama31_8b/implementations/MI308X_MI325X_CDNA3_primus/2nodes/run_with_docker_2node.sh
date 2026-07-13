@@ -1,9 +1,10 @@
 #!/bin/bash
-# Two-node launcher for llama31_8b. Run once on node0.
+# Two-node launcher for llama31_8b on CDNA3. Run once on node0.
 set -euo pipefail
 
-SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
-cd "$SCRIPT_DIR"
+TWO_NODE_DIR=$(dirname "$(readlink -f "$0")")
+ROOT_DIR=$(readlink -f "${TWO_NODE_DIR}/..")
+cd "$ROOT_DIR"
 
 : "${NODE0_IP:?set NODE0_IP (node0 IP, reachable from node1)}"
 : "${NODE1_IP:?set NODE1_IP (node1 IP, reachable over SSH)}"
@@ -12,17 +13,23 @@ cd "$SCRIPT_DIR"
 : "${MODELDIR:?set MODELDIR}"
 : "${LOGDIR:?set LOGDIR}"
 : "${SEED:?set SEED (same value on both nodes)}"
+: "${DGXSYSTEM_2N:?set DGXSYSTEM_2N to a supported config suffix under 2nodes/}"
 
 SSH_PORT="${SSH_PORT:-22}"
 SSH_USER="${SSH_USER:-root}"
 MASTER_PORT="${MASTER_PORT:-29502}"
 MASTER_ADDR="$NODE0_IP"
-REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
-DGXSYSTEM_2N="${DGXSYSTEM_2N:-MI308X_2x8x1}"
+REPO_DIR="${REPO_DIR:-$ROOT_DIR}"
+[[ "$REPO_DIR" == /* ]] || REPO_DIR=$(readlink -f "$REPO_DIR")
+CONFIG_FILE_2N="2nodes/config_${DGXSYSTEM_2N}.sh"
 LOG_PREFIX="${LOG_PREFIX:-run_2node}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)_$$}"
 CONT_NAME_BASE="${CONT_NAME_BASE:-${CONT_NAME:-mlperf_llama31_8b}}"
 
+[[ "${DGXSYSTEM_2N}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || {
+  echo "[2node] ERROR: invalid DGXSYSTEM_2N: ${DGXSYSTEM_2N}" >&2
+  exit 1
+}
 [[ "${RUN_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,47}$ ]] || {
   echo "[2node] ERROR: invalid RUN_ID: ${RUN_ID}" >&2
   exit 1
@@ -83,10 +90,16 @@ DOCKER_LOCAL=(docker)
 
 echo "==================================================================="
 echo "[2node] node0=$NODE0_IP  node1=$NODE1_IP  master=$MASTER_ADDR:$MASTER_PORT"
-echo "[2node] image=$CONT  seed=$SEED  iters=$PRIMUS_TRAIN_ITERS"
+echo "[2node] system=$DGXSYSTEM_2N  image=$CONT  seed=$SEED  iters=$PRIMUS_TRAIN_ITERS"
 echo "[2node] containers: $NODE0_CONT_NAME / $NODE1_CONT_NAME"
 echo "[2node] logs: $NODE0_LOG / $NODE1_LOG"
 echo "==================================================================="
+
+if [[ ! -r "${REPO_DIR}/${CONFIG_FILE_2N}" || ! -r "${REPO_DIR}/run_with_docker.sh" ]]; then
+  echo "[2node] ERROR: incomplete repository at $REPO_DIR" >&2
+  echo "[2node] expected $CONFIG_FILE_2N and run_with_docker.sh" >&2
+  exit 1
+fi
 
 if ! "${DOCKER_LOCAL[@]}" images --format '{{.Repository}}:{{.Tag}}' | grep -Fqx -- "$CONT"; then
   echo "[2node] ERROR: image $CONT not found on node0" >&2
@@ -101,9 +114,10 @@ if ! "${SSH[@]}" "$SSH_USER@$NODE1_IP" "$REMOTE_IMAGE_CHECK"; then
   exit 1
 fi
 
-printf -v REMOTE_REPO_CHECK 'test -d %q' "$REPO_DIR"
+printf -v REMOTE_REPO_CHECK 'test -r %q && test -r %q' \
+  "${REPO_DIR}/${CONFIG_FILE_2N}" "${REPO_DIR}/run_with_docker.sh"
 if ! "${SSH[@]}" "$SSH_USER@$NODE1_IP" "$REMOTE_REPO_CHECK"; then
-  echo "[2node] ERROR: repo $REPO_DIR not found on node1" >&2
+  echo "[2node] ERROR: repo $REPO_DIR is incomplete or missing on node1" >&2
   exit 1
 fi
 
@@ -121,10 +135,11 @@ build_cmd() {  # $1=node rank, $2=container name
   cmd+=" $(shell_assignment MASTER_ADDR "$MASTER_ADDR")"
   cmd+=" $(shell_assignment CONT_NAME "$container_name")"
   cmd+="$CALLER_DIST_EXPORTS"
-  cmd+=" && source $(printf '%q' "config_${DGXSYSTEM_2N}.sh")"
+  cmd+=" && source $(printf '%q' "$CONFIG_FILE_2N")"
   cmd+=" && export $(shell_assignment MASTER_PORT "$MASTER_PORT")"
   cmd+=" $(shell_assignment NODE_RANK "$rank")"
   cmd+=" $(shell_assignment CONT_NAME "$container_name")"
+  cmd+=" $(shell_assignment CONFIG_FILE "$CONFIG_FILE_2N")"
   cmd+=" $(shell_assignment PRIMUS_TRAIN_ITERS "$PRIMUS_TRAIN_ITERS")"
   cmd+=" $(shell_assignment MLPERF_VERBOSE_LOGS "$MLPERF_VERBOSE_LOGS")"
   cmd+="$CALLER_DIST_EXPORTS"

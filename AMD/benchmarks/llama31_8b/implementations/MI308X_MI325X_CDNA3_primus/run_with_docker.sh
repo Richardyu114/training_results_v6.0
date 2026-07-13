@@ -19,7 +19,6 @@ set -euxo pipefail
 # Change directory to the primus directory
 SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
 cd "$SCRIPT_DIR"
-source "${SCRIPT_DIR}/bnxt_rdma_overlay.sh"
 
 # Vars without defaults
 : "${DGXSYSTEM:?DGXSYSTEM not set}"
@@ -42,21 +41,49 @@ source "${SCRIPT_DIR}/bnxt_rdma_overlay.sh"
 : "${HF_TOKEN:=""}"
 
 # Other vars
-readonly _config_file="config_${DGXSYSTEM}.sh"
+readonly _config_file="${CONFIG_FILE:-config_${DGXSYSTEM}.sh}"
 echo "CONFIG FILE: ${_config_file}"
+if [[ ! -r "${_config_file}" ]]; then
+    echo "ERROR: config file is not readable: ${_config_file}" >&2
+    exit 2
+fi
 readonly _logfile_base="${LOGDIR}/${DATESTAMP}"
 readonly _cont_name="${CONT_NAME}"
 _cont_mounts=("--volume=${DATADIR}:/data" "--volume=${MODELDIR}:/model" "--volume=$(pwd):/workspace/code" "--volume=${LOGDIR}:/results")
 
-bnxt_rdma_prepare _cont_mounts "${DGXSYSTEM}" "${NNODES:-1}" "${CONT}"
-
+if (( ${NNODES:-1} > 1 )); then
+    source "${SCRIPT_DIR}/2nodes/bnxt_rdma_overlay.sh"
+    bnxt_rdma_prepare _cont_mounts "${DGXSYSTEM}" "${NNODES}" "${CONT}"
+fi
 
 # Setup directories
 mkdir -p "${LOGDIR}"
 mkdir -p "${LOGDIR}/artifacts/"
 
-# Get list of envvars to pass to docker
-mapfile -t _config_env < <(env -i bash -c ". ${_config_file} && compgen -e" | grep -E -v '^(PWD|SHLVL)')
+# Get the config's exported variables. On multi-node runs, preserve caller
+# network overrides while sourcing the config in the clean enumeration shell.
+_config_source_env=(env -i CONFIG_FILE="${_config_file}")
+_runtime_dist_env=()
+if (( ${NNODES:-1} > 1 )); then
+    mapfile -t _runtime_dist_env < <(
+        compgen -e \
+            | grep -E '^(NCCL_|TORCH_NCCL_|GLOO_|TORCH_DISTRIBUTED_DEBUG$)' \
+            | sort -u \
+            || true
+    )
+    for _dist_env_name in "${_runtime_dist_env[@]}"; do
+        _config_source_env+=("${_dist_env_name}=${!_dist_env_name}")
+    done
+fi
+if ! _config_export_names="$(
+    "${_config_source_env[@]}" bash -c '. "${CONFIG_FILE}" && compgen -e'
+)"; then
+    echo "ERROR: failed to source config file: ${_config_file}" >&2
+    exit 2
+fi
+mapfile -t _config_env < <(
+    printf '%s\n' "${_config_export_names}" | grep -E -v '^(PWD|SHLVL)'
+)
 _config_env+=(DATADIR)
 _config_env+=(MODELDIR)
 _config_env+=(MODEL)
@@ -71,12 +98,6 @@ _config_env+=(SEED)
 
 # Forward caller-only distributed overrides on multi-node runs.
 if (( ${NNODES:-1} > 1 )); then
-    mapfile -t _runtime_dist_env < <(
-        compgen -e \
-            | grep -E '^(NCCL_|TORCH_NCCL_|GLOO_|TORCH_DISTRIBUTED_DEBUG$)' \
-            | sort -u \
-            || true
-    )
     _config_env+=("${_runtime_dist_env[@]}")
     mapfile -t _config_env < <(
         printf '%s\n' "${_config_env[@]}" | awk 'NF && !seen[$0]++'

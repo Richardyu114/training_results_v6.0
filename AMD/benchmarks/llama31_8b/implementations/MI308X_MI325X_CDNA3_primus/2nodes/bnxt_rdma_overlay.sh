@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Discover and mount the daemon host's Broadcom RDMA userspace libraries.
+# Discover and mount Broadcom RDMA userspace libraries from the Docker daemon host.
 # Source this file and call:
 #   bnxt_rdma_prepare DOCKER_ARGS_ARRAY DGXSYSTEM NNODES IMAGE
 #
@@ -45,10 +45,17 @@ safe_path() {
 }
 
 shopt -s nullglob
-hcas=(/sys/class/infiniband/bnxt_re*)
+hcas=()
+for hca_path in /sys/class/infiniband/*; do
+    [[ -e "${hca_path}" ]] || continue
+    hca_vendor="$(cat "${hca_path}/device/vendor" 2>/dev/null || true)"
+    if [[ "${hca_vendor,,}" == 0x14e4 ]]; then
+        hcas+=("${hca_path}")
+    fi
+done
 if (( ${#hcas[@]} == 0 )); then
     [[ -z "${verbs_override}${provider_override}" ]] \
-        || die "explicit bnxt_re paths were supplied, but no bnxt_re HCA exists"
+        || die "explicit bnxt_re paths were supplied, but no Broadcom RDMA HCA exists"
     echo NONE
     exit 0
 fi

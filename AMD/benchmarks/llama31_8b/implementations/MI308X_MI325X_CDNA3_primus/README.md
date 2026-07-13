@@ -201,9 +201,10 @@ Note:To optimize the machine's performance, the training script will also execut
 ### Multi-node (2×8 = 16 GPU) [Optional]
 
 The steps above are single-node (8 GPU). For an optional **two-node** run (no SLURM required),
-use `config_MI308X_2x8x1.sh` + `run_with_docker_2node.sh`. Cross-node NCCL/RoCE settings are
-auto-detected, so nothing cluster-specific is hardcoded. See **[MULTINODE.md](MULTINODE.md)** for
-the prerequisites, launch options, network configuration, and failure-handling behavior.
+use `2nodes/run_with_docker_2node.sh` with the MI308X or MI325X configuration in `2nodes/`.
+Cross-node NCCL/RoCE settings are auto-detected, so nothing cluster-specific is hardcoded. See
+**[2nodes/MULTINODE.md](2nodes/MULTINODE.md)** for platform selection, prerequisites, launch options,
+network configuration, and failure-handling behavior.
 
 
 # 4. Check Quality
