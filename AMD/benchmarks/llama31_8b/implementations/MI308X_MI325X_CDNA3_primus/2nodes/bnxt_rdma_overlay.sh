@@ -62,10 +62,71 @@ fi
 
 driver_version="$(cat /sys/module/bnxt_re/version 2>/dev/null || true)"
 [[ -n "${driver_version}" ]] || die "cannot read the bnxt_re kernel driver version"
+[[ "${driver_version}" =~ ^[[:alnum:]][[:alnum:]_.+-]*$ ]] \
+    || die "bnxt_re kernel driver version is not safe to use in a library name"
 
-for tool in ldconfig readlink readelf strings find; do
+for tool in ldconfig readlink readelf strings find awk sed grep sort; do
     command -v "${tool}" >/dev/null 2>&1 || die "host is missing ${tool}"
 done
+
+provider_roots=(/usr/local/lib /usr/local/lib64 /usr/lib /usr/lib64 /lib /lib64)
+
+verify_provider_version() {
+    local provider="$1"
+    local root version_link version_real version_name
+    local -a embedded_versions=() alias_versions=()
+    local -A alias_versions_seen=()
+
+    VERSION_EVIDENCE=""
+    VERSION_EVIDENCE_PATH="-"
+
+    mapfile -t embedded_versions < <(
+        strings -a "${provider}" \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+([[:alnum:]_.+-]*)?$' \
+            | sort -Vu || true
+    )
+    if (( ${#embedded_versions[@]} > 0 )) \
+        && printf '%s\n' "${embedded_versions[@]}" \
+            | grep -Fx "${driver_version}" >/dev/null; then
+        VERSION_EVIDENCE="embedded-string"
+        return 0
+    fi
+
+    # An explicit but different embedded version is stronger evidence than a
+    # possibly stale symlink, so never fall back in that case.
+    (( ${#embedded_versions[@]} == 0 )) || return 1
+
+    for root in "${provider_roots[@]}"; do
+        [[ -e "${root}" ]] || continue
+        for version_link in "${root}"/libbnxt_re-*.so; do
+            [[ -L "${version_link}" ]] || continue
+            version_real="$(readlink -f -- "${version_link}" 2>/dev/null || true)"
+            [[ "${version_real}" == "${provider}" ]] || continue
+
+            version_name="${version_link##*/}"
+            version_name="${version_name#libbnxt_re-}"
+            version_name="${version_name%.so}"
+            [[ "${version_name}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+([[:alnum:]_.+-]*)?$ ]] \
+                || continue
+            if [[ -z "${alias_versions_seen[${version_name}]+x}" ]]; then
+                alias_versions_seen["${version_name}"]=1
+                alias_versions+=("${version_name}")
+            fi
+            if [[ "${version_name}" == "${driver_version}" \
+                && "${VERSION_EVIDENCE_PATH}" == - ]]; then
+                VERSION_EVIDENCE_PATH="${version_link}"
+            fi
+        done
+    done
+
+    if (( ${#alias_versions[@]} == 1 )) \
+        && [[ "${alias_versions[0]}" == "${driver_version}" \
+            && "${VERSION_EVIDENCE_PATH}" != - ]]; then
+        VERSION_EVIDENCE="versioned-symlink"
+        return 0
+    fi
+    return 1
+}
 
 if [[ -n "${verbs_override}" ]]; then
     safe_path "${verbs_override}"
@@ -74,10 +135,10 @@ if [[ -n "${verbs_override}" ]]; then
     providers=("${provider_override}")
 else
     verbs="$(ldconfig -p 2>/dev/null \
-        | awk '$1 == "libibverbs.so.1" {print $NF; exit}')"
+        | awk '$1 == "libibverbs.so.1" && !found++ {print $NF}')"
     verbs="$(readlink -f -- "${verbs}" 2>/dev/null || true)"
     providers=()
-    for root in /usr/local/lib /usr/local/lib64 /usr/lib /usr/lib64 /lib /lib64; do
+    for root in "${provider_roots[@]}"; do
         [[ -e "${root}" ]] || continue
         while IFS= read -r -d '' candidate; do
             [[ "${candidate,,}" == *inbox* ]] || providers+=("${candidate}")
@@ -105,7 +166,7 @@ for candidate in "${providers[@]}"; do
     [[ "${soname}" =~ ^libbnxt_re-rdmav([0-9]+)\.so$ ]] || continue
     private_abi="${BASH_REMATCH[1]}"
 
-    strings -a "${provider}" | grep -Fx "${driver_version}" >/dev/null || continue
+    verify_provider_version "${provider}" || continue
     readelf --version-info "${provider}" 2>/dev/null \
         | grep -F "IBVERBS_PRIVATE_${private_abi}" >/dev/null || continue
     readelf --version-info "${verbs}" 2>/dev/null \
@@ -120,7 +181,7 @@ for candidate in "${providers[@]}"; do
     provider_dst="${templates[0]/\%s/bnxt_re}"
     [[ "${provider_dst##*/}" == "${soname}" ]] || continue
 
-    valid+=("${provider}"$'\t'"${soname}"$'\t'"${provider_dst}")
+    valid+=("${provider}"$'\t'"${soname}"$'\t'"${provider_dst}"$'\t'"${VERSION_EVIDENCE}"$'\t'"${VERSION_EVIDENCE_PATH}")
 done
 
 (( ${#valid[@]} == 1 )) || {
@@ -129,7 +190,12 @@ done
     exit 1
 }
 
-IFS=$'\t' read -r provider soname provider_dst <<< "${valid[0]}"
+IFS=$'\t' read -r provider soname provider_dst version_evidence version_evidence_path \
+    <<< "${valid[0]}"
+echo "[rdma] provider version evidence=${version_evidence} version=${driver_version}" >&2
+if [[ "${version_evidence_path}" != - ]]; then
+    echo "[rdma] provider version link=${version_evidence_path}" >&2
+fi
 printf 'BNXT\t%s\t%s\t%s\t%s\t%s\n' \
     "${driver_version}" "${verbs}" "${provider}" "${soname}" "${provider_dst}"
 HOST_EOF
