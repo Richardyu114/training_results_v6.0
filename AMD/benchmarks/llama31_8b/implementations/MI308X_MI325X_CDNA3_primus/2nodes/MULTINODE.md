@@ -52,7 +52,8 @@ Multi-node jobs use torchrun's static rendezvous. Node 0 hosts the rendezvous en
 - Direct Docker daemon access for the node0 user and `SSH_USER`; `docker info` must succeed without
   `sudo` or a password prompt.
 - The repository, dataset, tokenizer, and results directories at identical absolute paths on both
-  Docker daemon hosts.
+  Docker daemon hosts. Identical paths do not imply shared storage; separately staged node-local
+  datasets must also contain the generated Megatron dataset cache described below.
 - TCP connectivity from node1 to `NODE0_IP:MASTER_PORT` (default port: `29502`), with the port
   available on node0.
 - A working cross-node RoCE network when RDMA transport is enabled.
@@ -66,16 +67,99 @@ interface names as the training container; otherwise, set `NCCL_SOCKET_IFNAME` a
 `GLOO_SOCKET_IFNAME` explicitly. Docker bind-mount source paths are resolved by the daemon host,
 not by the launcher container.
 
-Before launching, verify node1 access from node0:
+### Configure passwordless SSH
+
+Run these commands on node0 as the same user and in the same environment that will run
+`run_with_docker_2node.sh`. Only node0-to-node1 passwordless access is required by this launcher.
 
 ```bash
 export NODE1_IP=192.0.2.11      # documentation address; replace with the node1 address
 export SSH_USER=training        # replace with the node1 login user
 export SSH_PORT=22
 
-ssh -p "${SSH_PORT}" "${SSH_USER}@${NODE1_IP}" \
-  'set -e; test -n "$BASH_VERSION"; bash --version | head -1; docker info >/dev/null; hostname'
+install -d -m 700 "${HOME}/.ssh"
+if [[ ! -f "${HOME}/.ssh/id_ed25519" ]]; then
+  ssh-keygen -t ed25519 -N '' -f "${HOME}/.ssh/id_ed25519" \
+    -C "mlperf-2node@$(hostname)"
+fi
+
+cat "${HOME}/.ssh/id_ed25519.pub"
 ```
+
+Copy the printed public key to node1 and append it to the remote user's `authorized_keys`:
+
+```bash
+# Run on node1 as SSH_USER.
+install -d -m 700 "${HOME}/.ssh"
+touch "${HOME}/.ssh/authorized_keys"
+chmod 600 "${HOME}/.ssh/authorized_keys"
+vi "${HOME}/.ssh/authorized_keys"
+```
+
+Then verify from node0 that SSH is non-interactive and that the remote user can access Docker:
+
+```bash
+ssh -p "${SSH_PORT}" \
+  -o BatchMode=yes \
+  -o StrictHostKeyChecking=accept-new \
+  -o ConnectTimeout=10 \
+  "${SSH_USER}@${NODE1_IP}" \
+  'docker info >/dev/null && hostname'
+```
+
+`BatchMode=yes` must succeed without a password or passphrase prompt. If the launcher runs inside a
+development container, make the same SSH identity and `known_hosts` available there.
+
+### Dataset cache on node-local storage
+
+The downloaded dataset contains the four preprocessed `.bin` and `.idx` files. Megatron creates
+additional GPT dataset indices at runtime under the following directories:
+
+```text
+${DATADIR}/c4-train.en_6_text_document/cache/GPTDataset_indices/
+${DATADIR}/c4-validation-91205-samples.en_text_document/cache/GPTDataset_indices/
+```
+
+During a distributed run, global rank 0 creates a missing cache and the other ranks load it after a
+barrier. **If `DATADIR` is on storage shared by both nodes, no manual cache copy is needed. If each
+node instead has an independent local copy at the same absolute path, files created by rank 0 on
+node0 are not visible on node1 and must be copied manually.** In that case, node1 can fail with a
+path such as:
+
+```text
+/data/c4-train.en_6_text_document/cache/GPTDataset_indices/...-document_index.npy
+```
+
+After node0 has generated the cache, stop the failed run and copy both complete cache directories
+from node0 to node1. Run the following on node0; it does not copy the large `.bin` or `.idx` files:
+
+```bash
+export DATADIR=/path/to/mlperf_data/data
+export NODE1_IP=192.0.2.11
+export SSH_USER=training
+export SSH_PORT=22
+
+for dataset in \
+  c4-train.en_6_text_document \
+  c4-validation-91205-samples.en_text_document
+do
+  cache="${DATADIR}/${dataset}/cache/GPTDataset_indices"
+  test -d "${cache}" || {
+    echo "Missing node0 cache: ${cache}" >&2
+    exit 1
+  }
+
+  ssh -p "${SSH_PORT}" "${SSH_USER}@${NODE1_IP}" \
+    "mkdir -p '${cache}'"
+  scp -P "${SSH_PORT}" -p "${cache}/"* \
+    "${SSH_USER}@${NODE1_IP}:${cache}/"
+done
+```
+
+Copy the entire directory rather than only the filename reported by the exception. Each cache key
+contains a description plus document, sample, and shuffle indices. Repeat the copy when a changed
+dataset configuration produces a new cache key. For large or interrupted transfers, `rsync` may be
+used instead of `scp` to resume and transfer only missing files.
 
 ## Launch a validation run
 
@@ -208,8 +292,10 @@ that case, connect to node1 and remove the container name printed by the launche
 
 | Symptom | Check |
 |---|---|
+| SSH preflight prompts or fails | Re-run the `BatchMode=yes` check; verify the selected public key, remote `~/.ssh` permissions, and server-side public-key authentication. |
 | Image preflight fails | Run `docker info` and `docker image inspect "$CONT"` as the launch user on both nodes. |
 | Repository preflight fails | Confirm `REPO_DIR` exists at the same absolute path on node1. |
+| `GPTDataset_indices` file is missing on node1 | If `DATADIR` is node-local, copy both generated cache directories from node0 as described above. |
 | Rendezvous times out | Verify `NODE0_IP`, firewall rules, and node1-to-node0 access to `MASTER_PORT`. |
 | Gloo connection fails | Verify `GLOO_SOCKET_IFNAME` resolves to a node1-to-node0 reachable interface on both nodes. |
 | NCCL or RDMA initialization fails | Check the HCA, GID index, and discovery messages in both logs. |
