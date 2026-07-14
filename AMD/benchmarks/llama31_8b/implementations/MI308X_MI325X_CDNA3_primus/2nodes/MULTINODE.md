@@ -58,9 +58,6 @@ Multi-node jobs use torchrun's static rendezvous. Node 0 hosts the rendezvous en
   available on node0.
 - A working cross-node RoCE network when RDMA transport is enabled.
 
-By default, each node runs `sudo /sbin/sysctl vm.drop_caches=3` before an experiment. Configure
-non-interactive sudo on both nodes, or set `CLEAR_CACHES=0`.
-
 If the launcher runs inside a development container, use host networking and expose the host
 Docker socket plus the relevant network/RDMA sysfs devices. The launcher must see the same network
 interface names as the training container; otherwise, set `NCCL_SOCKET_IFNAME` and
@@ -82,18 +79,21 @@ if [[ ! -f "${HOME}/.ssh/id_ed25519" ]]; then
   ssh-keygen -t ed25519 -N '' -f "${HOME}/.ssh/id_ed25519" \
     -C "mlperf-2node@$(hostname)"
 fi
+[[ -f "${HOME}/.ssh/id_ed25519.pub" ]] || \
+  ssh-keygen -y -f "${HOME}/.ssh/id_ed25519" > "${HOME}/.ssh/id_ed25519.pub"
 
 cat "${HOME}/.ssh/id_ed25519.pub"
 ```
 
-Copy the printed public key to node1 and append it to the remote user's `authorized_keys`:
+Copy the printed public key to node1 and append it as one line to the remote user's
+`authorized_keys`:
 
 ```bash
 # Run on node1 as SSH_USER.
 install -d -m 700 "${HOME}/.ssh"
 touch "${HOME}/.ssh/authorized_keys"
 chmod 600 "${HOME}/.ssh/authorized_keys"
-vi "${HOME}/.ssh/authorized_keys"
+# Append the copied node0 public key as one complete line to this file.
 ```
 
 Then verify from node0 that SSH is non-interactive and that the remote user can access Docker:
@@ -158,21 +158,18 @@ done
 
 Copy the entire directory rather than only the filename reported by the exception. Each cache key
 contains a description plus document, sample, and shuffle indices. Repeat the copy when a changed
-dataset configuration produces a new cache key. For large or interrupted transfers, `rsync` may be
-used instead of `scp` to resume and transfer only missing files.
+dataset configuration produces a new cache key.
 
 ## Launch a validation run
 
 Run the launcher from node0:
 
 ```bash
-cd /path/to/MI308X_MI325X_CDNA3_primus
+cd /path/to/MI308X_MI325X_CDNA3_primus/2nodes
 
-# Platform: uncomment exactly one supported SYSTEM entry from the table above.
-# export SYSTEM=MI308X
-# export SYSTEM=MI325X
-: "${SYSTEM:?select a supported SYSTEM}"
-export DGXSYSTEM_2N="${SYSTEM}_2x8x1"
+# Platform: uncomment exactly one supported configuration from the table above.
+# export DGXSYSTEM_2N=MI308X_2x8x1
+# export DGXSYSTEM_2N=MI325X_2x8x1
 
 # Network topology
 export NODE0_IP=192.0.2.10      # documentation address; replace with the node0 address
@@ -195,16 +192,17 @@ export PRIMUS_LR=3e-4
 export PRIMUS_MIN_LR=3e-5
 export MLPERF_VERBOSE_LOGS=1
 
-bash 2nodes/run_with_docker_2node.sh
+bash run_with_docker_2node.sh
 ```
 
-Each platform wrapper inherits its matching `../config_<SYSTEM>_1x8x1.sh` and applies only the
-shared two-node delta. On the first run on a new platform, confirm the `[config]` and `[rdma]` lines
-in both node logs select the expected socket NIC, HCA list, GID index, and host-matched provider.
+Each platform wrapper inherits its matching single-node `../config_<platform>_1x8x1.sh` and applies
+only the shared two-node delta. On the first run on a new platform, confirm the `[config]` and
+`[rdma]` lines in both node logs select the expected socket NIC, HCA list, GID index, and
+host-matched provider.
 
-The launcher defaults to 50 iterations. For longer training, set `PRIMUS_TRAIN_ITERS` explicitly
-and use the learning-rate schedule validated for the selected numerical recipe. The global batch
-size is 64, so convergence should be evaluated independently from the single-node configuration.
+The launcher defaults to 50 iterations. For full training, set `PRIMUS_TRAIN_ITERS=1200000` and use
+the learning-rate schedule validated for the selected numerical recipe. The global batch size is 64,
+so convergence should be evaluated independently from the single-node configuration.
 
 The default experiment is FP8 hybrid. To run the BF16 configuration, add:
 
@@ -220,11 +218,9 @@ export WARMUP_RECIPE=bf16
 | `SSH_USER` | `root` | Node1 login user |
 | `SSH_PORT` | `22` | Node1 SSH port |
 | `MASTER_PORT` | `29502` | Torchrun rendezvous port on node0 |
-| `REPO_DIR` | implementation root | Repository path shared by both nodes |
 | `DGXSYSTEM_2N` | required | Configuration filename suffix selected from the platform table |
 | `PRIMUS_TRAIN_ITERS` | `50` | Per-run iteration cap |
 | `MLPERF_VERBOSE_LOGS` | `1` | Enable per-iteration training output |
-| `CLEAR_CACHES` | `1` | Drop host page cache before each experiment |
 | `RUN_ID` | generated | Suffix for container and launcher-log names |
 | `LOG_PREFIX` | `run_2node` | Launcher-log filename prefix |
 
