@@ -1,0 +1,59 @@
+# --- Training logs ---
+*.log
+logs/
+old_slurm_logs/
+
+# --- SLURM / job output ---
+*.out
+slurm-*.out
+
+# --- Local run outputs / results / checkpoints ---
+output/
+outputs/
+results/
+mlruns/
+wandb/
+checkpoints/
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+
+# --- HTML reports (local-only deliverables) ---
+*.html
+
+# --- Docker image dumps ---
+*.tar
+*.tar.gz
+*.tar.zst
+
+# --- Python cache / build ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# --- Editor / OS ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# --- Env / secrets ---
+.env
+.env.local
+
+# --- Temp / core dumps ---
+*.tmp
+*.temp
+tmp/
+temp/
+core
+core.*
+*.dmp
