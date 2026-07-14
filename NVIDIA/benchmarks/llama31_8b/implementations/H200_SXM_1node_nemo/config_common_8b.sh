@@ -3,7 +3,10 @@ export TARGET_LOG_PPL="3.3"
 export LOAD_CHECKPOINT=""
 export OVERWRITTEN_NUM_LAYERS=32
 export VAL_SAMPLES=1024
-export MAX_STEPS=1200000
+# Full run to target is 1200000. Allow an external override (e.g. MAX_STEPS=50 for a smoke test);
+# the upstream file hardcodes this, which silently ignores a caller-provided value.
+export MAX_STEPS=${MAX_STEPS:-1200000}
+# LR cosine decay length follows MAX_STEPS, so a short smoke run keeps a self-consistent schedule.
 export OPT_LR_DECAY_STEPS=${MAX_STEPS}
 
 export OVERLAP_PARAM_GATHER_WITH_OPTIM_STEP=False
