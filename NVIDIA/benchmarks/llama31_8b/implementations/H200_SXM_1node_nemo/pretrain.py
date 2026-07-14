@@ -237,8 +237,14 @@ def get_mixed_precision(config):
             num_layers_at_end_in_bf16=num_layers_at_end_in_bf16,
         )
     else:
+        # NOTE: upstream passed precision="bf16-mixed" here, but MixedPrecisionConfig in
+        # Megatron-Bridge 26.04-alpha.rc1 has no `precision` field (it uses a bf16 bool flag),
+        # so that path raised TypeError. The official bf16_mixed() factory uses bf16=True; the FP8
+        # branch above likewise uses bf16=True. This branch is only reached for a pure-BF16 run
+        # (FP8/FP4 off), which the NVIDIA submission never exercises. Keep the other args identical
+        # to the broken original (they match the FP8 branch) — only swap the invalid kwarg.
         mixed_precision = MixedPrecisionConfig(
-            precision="bf16-mixed",
+            bf16=True,
             params_dtype=torch.bfloat16,
             pipeline_dtype=torch.bfloat16,
             autocast_enabled=False,
