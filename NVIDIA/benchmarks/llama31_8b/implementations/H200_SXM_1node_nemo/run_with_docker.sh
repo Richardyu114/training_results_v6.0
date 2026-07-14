@@ -48,8 +48,16 @@ _preproc="${DATADIR}/8b"
 _npy_index_dir="${LOGDIR}/${DATESTAMP}_npy_index"
 _mem_dump_dir="${LOGDIR}/mem_dump"
 ( umask 0002; mkdir -p "${LOGDIR}" "${_npy_index_dir}" "${_mem_dump_dir}" )
+# Because /workspace/llm is bind-mounted from ${SCRIPT_DIR}, the nested tokenizer mount lands at
+# ${SCRIPT_DIR}/nemo_tokenizer; ensure that mountpoint dir exists on the host (git-ignored).
+mkdir -p "${SCRIPT_DIR}/nemo_tokenizer"
 
 _cont_mounts=(
+    # Mount this directory over the image's /workspace/llm so edits to the training code
+    # (pretrain.py, configs, run_and_time.sh, ...) take effect without rebuilding the image.
+    # The compiled embedding_lib CUDA extension lives in site-packages, not here, so it is
+    # unaffected; the Python wrapper is imported from embedding_lib/ in this dir, which is present.
+    "--volume=${SCRIPT_DIR}:/workspace/llm"
     "--volume=${LOGDIR}:/results"
     "--volume=${_npy_index_dir}:/npy_index"
     "--volume=${_mem_dump_dir}:/mem_dump"

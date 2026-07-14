@@ -586,13 +586,20 @@ def main(cfg):
     # Skip numeric checks
     config_container.train.check_optimizer_step_success = False
     config_container.train.skip_sync_grad_norm_across_mp = True
-    
+
     # Skip logging & timers. The official submission disables the native train-metrics log and
     # timers (MLLOG only). With MLPERF_VERBOSE_LOGS=1 we keep them on so the native per-iteration
     # line (incl. throughput per GPU / TFLOP) is emitted; see get_logger_config above.
     if os.environ.get("MLPERF_VERBOSE_LOGS", "0") == "1":
         config_container.logger.skip_train_metrics_log = False
         config_container.logger.timing_log_level = 0
+        # The native training_log formats grad_norm with f"{grad_norm:.3f}", which requires a
+        # Python float. grad_norm is returned as a tensor by optimizer.step() and is only reduced
+        # to a float when skip_sync_grad_norm_across_mp is False. The official submission leaves it
+        # True (safe only because it never calls training_log), so re-enable the sync here to get a
+        # float and avoid "unsupported format string passed to Tensor.__format__". With TP=PP=CP=1
+        # the model-parallel group is a single rank, so this all-reduce is a no-op on cost.
+        config_container.train.skip_sync_grad_norm_across_mp = False
     else:
         config_container.logger.skip_train_metrics_log = True
         config_container.logger.timing_log_level = -1

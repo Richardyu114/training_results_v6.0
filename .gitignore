@@ -1,3 +1,6 @@
+# --- Runtime mountpoints (created by run_with_docker.sh, not source) ---
+**/nemo_tokenizer/
+
 # --- Training logs ---
 *.log
 logs/
