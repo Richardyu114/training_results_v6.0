@@ -26,6 +26,7 @@ _two_node_exp="${EXP:-${_two_node_fp8_exp}}"
 _two_node_warmup_recipe="${WARMUP_RECIPE:-}"
 _two_node_lr="${PRIMUS_LR:-3e-4}"
 _two_node_min_lr="${PRIMUS_MIN_LR:-3e-5}"
+_two_node_lr_warmup_iters="${PRIMUS_LR_WARMUP_ITERS:-64}"
 if [[ -z "${_two_node_warmup_recipe}" ]]; then
     case "${_two_node_exp##*/}" in
         llama3.1_8B-pretrain-bf16.yaml) _two_node_warmup_recipe=bf16 ;;
@@ -46,6 +47,7 @@ export EXP="${_two_node_exp}"
 export WARMUP_RECIPE="${_two_node_warmup_recipe}"
 export PRIMUS_LR="${_two_node_lr}"
 export PRIMUS_MIN_LR="${_two_node_min_lr}"
+export PRIMUS_LR_WARMUP_ITERS="${_two_node_lr_warmup_iters}"
 
 # These variables are informational in the CDNA3 base configs; the YAML remains the source of
 # truth for training precision and scaling. Keep the metadata aligned with the standard 2-node
@@ -189,4 +191,5 @@ echo "[config] ${DGXSYSTEM} network auto-detect: IFNAME=${NCCL_SOCKET_IFNAME} GI
 unset _auto_gid _auto_hca _auto_ifname _base_config _first_hca _gid_type
 unset _hca_path _hca_vendor _two_node_bf16_exp _two_node_dir _two_node_exp
 unset _two_node_fp8_exp _two_node_global_batch_size _two_node_lr _two_node_min_lr
+unset _two_node_lr_warmup_iters
 unset _two_node_master_addr _two_node_master_port _two_node_rank _two_node_warmup_recipe

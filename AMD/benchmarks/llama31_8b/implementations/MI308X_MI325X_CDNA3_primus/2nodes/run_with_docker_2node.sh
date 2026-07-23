@@ -70,9 +70,14 @@ fi
 PRIMUS_LR="${PRIMUS_LR:-3e-4}"
 PRIMUS_MIN_LR="${PRIMUS_MIN_LR:-3e-5}"
 PRIMUS_GLOBAL_BATCH_SIZE="${PRIMUS_GLOBAL_BATCH_SIZE:-32}"
+PRIMUS_LR_WARMUP_ITERS="${PRIMUS_LR_WARMUP_ITERS:-64}"
 
 [[ "$CLEAR_CACHES" == 0 || "$CLEAR_CACHES" == 1 ]] || {
   echo "[2node] ERROR: CLEAR_CACHES must be 0 or 1" >&2
+  exit 1
+}
+[[ "$PRIMUS_LR_WARMUP_ITERS" =~ ^[0-9]+$ ]] || {
+  echo "[2node] ERROR: PRIMUS_LR_WARMUP_ITERS must be a non-negative integer: $PRIMUS_LR_WARMUP_ITERS" >&2
   exit 1
 }
 
@@ -107,7 +112,7 @@ echo "==================================================================="
 echo "[2node] node0=$NODE0_IP  node1=$NODE1_IP  master=$MASTER_ADDR:$MASTER_PORT"
 echo "[2node] system=$DGXSYSTEM_2N  image=$CONT  seed=$SEED  iters=$PRIMUS_TRAIN_ITERS"
 echo "[2node] recipe: EXP=$EXP  warmup=$WARMUP_RECIPE  GBS=$PRIMUS_GLOBAL_BATCH_SIZE"
-echo "[2node] schedule: LR=$PRIMUS_LR  min_LR=$PRIMUS_MIN_LR"
+echo "[2node] schedule: LR=$PRIMUS_LR  min_LR=$PRIMUS_MIN_LR  warmup_iters=$PRIMUS_LR_WARMUP_ITERS"
 echo "[2node] containers: $NODE0_CONT_NAME / $NODE1_CONT_NAME"
 echo "[2node] logs: $NODE0_LOG / $NODE1_LOG"
 echo "==================================================================="
@@ -156,6 +161,7 @@ build_cmd() {  # $1=node rank, $2=container name
   cmd+=" $(shell_assignment WARMUP_RECIPE "$WARMUP_RECIPE")"
   cmd+=" $(shell_assignment PRIMUS_LR "$PRIMUS_LR")"
   cmd+=" $(shell_assignment PRIMUS_MIN_LR "$PRIMUS_MIN_LR")"
+  cmd+=" $(shell_assignment PRIMUS_LR_WARMUP_ITERS "$PRIMUS_LR_WARMUP_ITERS")"
   cmd+="$CALLER_DIST_EXPORTS"
 
   cmd+=" && source $(printf '%q' "$CONFIG_FILE_2N")"
@@ -170,6 +176,7 @@ build_cmd() {  # $1=node rank, $2=container name
   cmd+=" $(shell_assignment WARMUP_RECIPE "$WARMUP_RECIPE")"
   cmd+=" $(shell_assignment PRIMUS_LR "$PRIMUS_LR")"
   cmd+=" $(shell_assignment PRIMUS_MIN_LR "$PRIMUS_MIN_LR")"
+  cmd+=" $(shell_assignment PRIMUS_LR_WARMUP_ITERS "$PRIMUS_LR_WARMUP_ITERS")"
   cmd+=" && bash run_with_docker.sh"
   printf '%s' "$cmd"
 }
