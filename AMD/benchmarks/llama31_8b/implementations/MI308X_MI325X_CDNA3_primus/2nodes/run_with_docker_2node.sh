@@ -25,6 +25,7 @@ CONFIG_FILE_2N="2nodes/config_${DGXSYSTEM_2N}.sh"
 LOG_PREFIX="${LOG_PREFIX:-run_2node}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)_$$}"
 CONT_NAME_BASE="${CONT_NAME_BASE:-${CONT_NAME:-mlperf_llama31_8b}}"
+DEFAULT_FP8_EXP=/workspace/code/2nodes/conf/llama3.1_8B-pretrain-fp8.yaml
 
 [[ "${DGXSYSTEM_2N}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || {
   echo "[2node] ERROR: invalid DGXSYSTEM_2N: ${DGXSYSTEM_2N}" >&2
@@ -51,10 +52,24 @@ PRIMUS_TRAIN_ITERS="${PRIMUS_TRAIN_ITERS:-50}"
 MLPERF_VERBOSE_LOGS="${MLPERF_VERBOSE_LOGS:-1}"
 NEXP="${NEXP:-1}"
 CLEAR_CACHES="${CLEAR_CACHES:-1}"
-EXP="${EXP:-}"
+EXP="${EXP:-${DEFAULT_FP8_EXP}}"
 WARMUP_RECIPE="${WARMUP_RECIPE:-}"
-PRIMUS_LR="${PRIMUS_LR:-}"
-PRIMUS_MIN_LR="${PRIMUS_MIN_LR:-}"
+if [[ -z "${WARMUP_RECIPE}" ]]; then
+  case "${EXP##*/}" in
+    llama3.1_8B-pretrain-bf16.yaml) WARMUP_RECIPE=bf16 ;;
+    llama3.1_8B-pretrain-fp8.yaml)
+      # This selects only the synthetic warmup. Main-training E4M3/tensorwise is set by the YAML.
+      WARMUP_RECIPE=fp8_hybrid
+      ;;
+    *)
+      echo "[2node] ERROR: set WARMUP_RECIPE when overriding EXP=${EXP}" >&2
+      exit 1
+      ;;
+  esac
+fi
+PRIMUS_LR="${PRIMUS_LR:-3e-4}"
+PRIMUS_MIN_LR="${PRIMUS_MIN_LR:-3e-5}"
+PRIMUS_GLOBAL_BATCH_SIZE="${PRIMUS_GLOBAL_BATCH_SIZE:-32}"
 
 [[ "$CLEAR_CACHES" == 0 || "$CLEAR_CACHES" == 1 ]] || {
   echo "[2node] ERROR: CLEAR_CACHES must be 0 or 1" >&2
@@ -91,6 +106,8 @@ DOCKER_LOCAL=(docker)
 echo "==================================================================="
 echo "[2node] node0=$NODE0_IP  node1=$NODE1_IP  master=$MASTER_ADDR:$MASTER_PORT"
 echo "[2node] system=$DGXSYSTEM_2N  image=$CONT  seed=$SEED  iters=$PRIMUS_TRAIN_ITERS"
+echo "[2node] recipe: EXP=$EXP  warmup=$WARMUP_RECIPE  GBS=$PRIMUS_GLOBAL_BATCH_SIZE"
+echo "[2node] schedule: LR=$PRIMUS_LR  min_LR=$PRIMUS_MIN_LR"
 echo "[2node] containers: $NODE0_CONT_NAME / $NODE1_CONT_NAME"
 echo "[2node] logs: $NODE0_LOG / $NODE1_LOG"
 echo "==================================================================="
@@ -134,7 +151,13 @@ build_cmd() {  # $1=node rank, $2=container name
   cmd+=" $(shell_assignment NODE_RANK "$rank")"
   cmd+=" $(shell_assignment MASTER_ADDR "$MASTER_ADDR")"
   cmd+=" $(shell_assignment CONT_NAME "$container_name")"
+  cmd+=" $(shell_assignment PRIMUS_GLOBAL_BATCH_SIZE "$PRIMUS_GLOBAL_BATCH_SIZE")"
+  cmd+=" $(shell_assignment EXP "$EXP")"
+  cmd+=" $(shell_assignment WARMUP_RECIPE "$WARMUP_RECIPE")"
+  cmd+=" $(shell_assignment PRIMUS_LR "$PRIMUS_LR")"
+  cmd+=" $(shell_assignment PRIMUS_MIN_LR "$PRIMUS_MIN_LR")"
   cmd+="$CALLER_DIST_EXPORTS"
+
   cmd+=" && source $(printf '%q' "$CONFIG_FILE_2N")"
   cmd+=" && export $(shell_assignment MASTER_PORT "$MASTER_PORT")"
   cmd+=" $(shell_assignment NODE_RANK "$rank")"
@@ -143,10 +166,10 @@ build_cmd() {  # $1=node rank, $2=container name
   cmd+=" $(shell_assignment PRIMUS_TRAIN_ITERS "$PRIMUS_TRAIN_ITERS")"
   cmd+=" $(shell_assignment MLPERF_VERBOSE_LOGS "$MLPERF_VERBOSE_LOGS")"
   cmd+="$CALLER_DIST_EXPORTS"
-  [[ -n "$EXP" ]] && cmd+=" $(shell_assignment EXP "$EXP")"
-  [[ -n "$WARMUP_RECIPE" ]] && cmd+=" $(shell_assignment WARMUP_RECIPE "$WARMUP_RECIPE")"
-  [[ -n "$PRIMUS_LR" ]] && cmd+=" $(shell_assignment PRIMUS_LR "$PRIMUS_LR")"
-  [[ -n "$PRIMUS_MIN_LR" ]] && cmd+=" $(shell_assignment PRIMUS_MIN_LR "$PRIMUS_MIN_LR")"
+  cmd+=" $(shell_assignment EXP "$EXP")"
+  cmd+=" $(shell_assignment WARMUP_RECIPE "$WARMUP_RECIPE")"
+  cmd+=" $(shell_assignment PRIMUS_LR "$PRIMUS_LR")"
+  cmd+=" $(shell_assignment PRIMUS_MIN_LR "$PRIMUS_MIN_LR")"
   cmd+=" && bash run_with_docker.sh"
   printf '%s' "$cmd"
 }

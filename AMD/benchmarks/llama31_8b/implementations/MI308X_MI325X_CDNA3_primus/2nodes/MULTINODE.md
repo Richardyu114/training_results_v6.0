@@ -8,8 +8,10 @@ explicitly through `DGXSYSTEM_2N`; the launcher has no hardware-specific default
 Complete the image, dataset, and tokenizer setup in the [implementation README](../README.md)
 before using this launcher.
 
-The CDNA3 FP8 configuration is provided for functional enablement. It is not an MLPerf closed
-submission configuration because its numerical format differs from the submitted recipe.
+FP8 is the default two-node recipe, consistent with the single-node launch convention; BF16 is
+available as an optional baseline. The checked-in two-node FP8 parameters match the configuration
+observed to reach the target on MI325X. These enablement recipes are not a claim that this precision path is an
+official MLPerf closed-submission recipe.
 
 ## Configuration overview
 
@@ -20,21 +22,23 @@ submission configuration because its numerical format differs from the submitted
 | World size | 16 |
 | Parallelism | Data parallelism (TP=PP=CP=EP=1) |
 | Micro-batch size | 2 |
-| Global batch size | 64 |
-| Gradient accumulation | 2 |
+| Global batch size | 32 by default (`PRIMUS_GLOBAL_BATCH_SIZE` overrides it) |
+| Gradient accumulation | 1 by default (GBS32 / MBS2 / DP16) |
 
 Select one of the platform configurations before launch:
 
 | Platform | `DGXSYSTEM_2N` | Status |
 |---|---|---|
-| MI308X | `MI308X_2x8x1` | Validated with BF16 and FP8 50-step runs |
-| MI325X | `MI325X_2x8x1` | gfx942 baseline; pending MI325X two-node hardware validation |
+| MI325X | `MI325X_2x8x1` | Corresponding BF16 and E4M3 FP8 enablement runs reached the target |
+| MI308X | `MI308X_2x8x1` | Uses the shared recipes of MI325X |
 
 The multi-node path consists of:
 
 - `config_MI308X_2x8x1.sh` / `config_MI325X_2x8x1.sh`: platform selectors;
 - `config_common_2x8x1.sh`: shared two-node batch and network overlay on each platform's
   single-node configuration;
+- `conf/llama3.1_8B-pretrain-fp8.yaml`: default E4M3 + tensorwise/current FP8 recipe;
+- `conf/llama3.1_8B-pretrain-bf16.yaml`: optional two-node BF16 baseline;
 - `run_with_docker_2node.sh`: node0 launcher and node1 SSH coordination;
 - `../run_with_docker.sh`: shared per-node training container launcher;
 - `bnxt_rdma_overlay.sh`: optional Broadcom RDMA userspace-library discovery and mounts.
@@ -167,9 +171,8 @@ Run the launcher from node0:
 ```bash
 cd /path/to/MI308X_MI325X_CDNA3_primus/2nodes
 
-# Platform: uncomment exactly one supported configuration from the table above.
-# export DGXSYSTEM_2N=MI308X_2x8x1
-# export DGXSYSTEM_2N=MI325X_2x8x1
+# Platform
+export DGXSYSTEM_2N=MI325X_2x8x1  # use MI308X_2x8x1 on MI308X
 
 # Network topology
 export NODE0_IP=192.0.2.10      # documentation address; replace with the node0 address
@@ -192,24 +195,34 @@ export PRIMUS_LR=3e-4
 export PRIMUS_MIN_LR=3e-5
 export MLPERF_VERBOSE_LOGS=1
 
+# FP8 (E4M3 + tensorwise/current) is selected by default; no EXP override is required.
 bash run_with_docker_2node.sh
 ```
 
-Each platform wrapper inherits its matching single-node `../config_<platform>_1x8x1.sh` and applies
-only the shared two-node delta. On the first run on a new platform, confirm the `[config]` and
-`[rdma]` lines in both node logs select the expected socket NIC, HCA list, GID index, and
-host-matched provider.
+Each platform wrapper inherits its matching single-node kernel settings and applies the same
+two-node batch, recipe, and network defaults. On a new platform, confirm the `[config]` and `[rdma]`
+lines in both node logs select the expected NIC, HCA list, GID index, and provider.
 
-The launcher defaults to 50 iterations. For full training, set `PRIMUS_TRAIN_ITERS=1200000` and use
-the learning-rate schedule validated for the selected numerical recipe. The global batch size is 64,
-so convergence should be evaluated independently from the single-node configuration.
+The launcher defaults to 50 iterations. Both platforms default to GBS32, LR `3e-4` / minimum LR
+`3e-5`, and the following recipes:
 
-The default experiment is FP8 hybrid. To run the BF16 configuration, add:
+| Mode | Experiment YAML | Warmup | Notes |
+|---|---|---|---|
+| FP8 (default) | `/workspace/code/2nodes/conf/llama3.1_8B-pretrain-fp8.yaml` | `fp8_hybrid` | E4M3 forward + backward, tensorwise/current scaling, three FP32 settings, and collective AVG |
+| BF16 (optional) | `/workspace/code/2nodes/conf/llama3.1_8B-pretrain-bf16.yaml` | `bf16` | BF16 model path with the same three FP32 settings and collective AVG |
+
+With no precision override, the launcher selects the FP8 YAML and infers the `fp8_hybrid`
+synthetic warmup. To select the optional BF16 baseline, set these before launching:
 
 ```bash
-export EXP=/workspace/code/conf/llama3.1_8B-pretrain-bf16.yaml
+export EXP=/workspace/code/2nodes/conf/llama3.1_8B-pretrain-bf16.yaml
 export WARMUP_RECIPE=bf16
 ```
+
+Set `PRIMUS_TRAIN_ITERS=1200000` for full training. `PRIMUS_GLOBAL_BATCH_SIZE` can override GBS32;
+the launcher forwards it to both nodes and recomputes `PRIMUS_EVAL_INTERVAL`. Convergence evidence
+currently covers GBS32. An override must be a positive multiple of DP×MBS (`16×2=32`) and must
+divide the 12,288-sample evaluation interval exactly.
 
 ## Launcher options
 
@@ -220,6 +233,11 @@ export WARMUP_RECIPE=bf16
 | `MASTER_PORT` | `29502` | Torchrun rendezvous port on node0 |
 | `DGXSYSTEM_2N` | required | Configuration filename suffix selected from the platform table |
 | `PRIMUS_TRAIN_ITERS` | `50` | Per-run iteration cap |
+| `PRIMUS_GLOBAL_BATCH_SIZE` | `32` | Global batch size forwarded identically to both nodes |
+| `PRIMUS_LR` | `3e-4` | Peak learning rate; override together with `PRIMUS_MIN_LR` |
+| `PRIMUS_MIN_LR` | `3e-5` | Minimum learning rate; override together with `PRIMUS_LR` |
+| `EXP` | two-node FP8 YAML | Experiment-YAML selection; use the two-node BF16 YAML for the optional BF16 baseline |
+| `WARMUP_RECIPE` | inferred from `EXP` | `bf16` for the standard BF16 YAML, `fp8_hybrid` for the standard FP8 YAML; required for custom YAML names |
 | `MLPERF_VERBOSE_LOGS` | `1` | Enable per-iteration training output |
 | `RUN_ID` | generated | Suffix for container and launcher-log names |
 | `LOG_PREFIX` | `run_2node` | Launcher-log filename prefix |

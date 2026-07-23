@@ -1,0 +1,150 @@
+# Two-node BF16 recipe validated with DP=16, GBS=32, and gradient accumulation=1.
+work_group: ${TEAM:amd}
+user_name: ${USER:root}
+exp_name: ${EXP_NAME:llama3.1_8B-pretrain-2node-bf16}
+workspace: ./output
+
+modules:
+  pre_trainer:
+    framework: megatron
+    config: pre_trainer.yaml
+
+    # model to run
+    model: llama3.1_8B.yaml
+    overrides:
+      tokenizer_model: /model
+      # --- Logging Config ---
+      disable_wandb: true
+      disable_tensorboard: true
+      # stderr_sink_level: Primus routes logs through loguru with a sink at this level. The
+      # per-iteration training log (loss + throughput) is emitted at INFO via log_rank_last();
+      # the original MI350X submission set this to ERROR, so those INFO lines were dropped at the
+      # source (which is why loss never printed regardless of FD-level suppression). We default to
+      # INFO so the training line is actually emitted; set PRIMUS_STDERR_SINK_LEVEL=ERROR to
+      # restore the original quiet behavior.
+      stderr_sink_level: ${PRIMUS_STDERR_SINK_LEVEL:INFO}
+      # log_interval: how often (in steps) to print loss + per-iteration timing/throughput.
+      # The original MI350X submission set this to 9999999 (effectively silencing per-step logs
+      # during the timed run). We default to 10 so loss and performance numbers are visible; set
+      # PRIMUS_LOG_INTERVAL=9999999 to restore the original quiet behavior.
+      log_interval: ${PRIMUS_LOG_INTERVAL:10}
+      # log_throughput: when true, the per-iteration log line additionally reports
+      # "throughput per GPU (TFLOP/s/GPU)" and "tokens per GPU (tokens/s/GPU)".
+      # Default off in Primus; we enable it so performance numbers print alongside loss.
+      log_throughput: ${PRIMUS_LOG_THROUGHPUT:true}
+      log_avg_skip_iterations: 2
+      log_avg_reset_interval: 50
+      eval_iters: ${PRIMUS_EVAL_ITERS:32}  # Default GBS32: 32 * 32 = 1024 eval samples
+      eval_interval: ${PRIMUS_EVAL_INTERVAL:10} # Two-node shell default: 12288 / GBS32 = 384 steps
+
+      # --- Training Config ---
+      train_iters: ${PRIMUS_TRAIN_ITERS:200}
+      micro_batch_size: ${PRIMUS_MICRO_BATCH_SIZE:2}                # DP=16, default GBS=32 -> grad_acc=1
+      global_batch_size: ${PRIMUS_GLOBAL_BATCH_SIZE:32}
+      seq_length: 8192
+      max_position_embeddings: 8192
+      seed: ${SEED:1234}
+      lr: ${PRIMUS_LR:0.0003}
+      min_lr: ${PRIMUS_MIN_LR:0.00003}
+      lr_warmup_iters: ${PRIMUS_LR_WARMUP_ITERS:64}
+      lr_decay_iters: 1199936
+      lr_decay_style: cosine
+      weight_decay: 0.1
+      adam_beta1: 0.9
+      adam_beta2: 0.95
+      eod_mask_loss: false
+      init_method_std: 0.02
+      norm_epsilon: 1.0e-5
+      adam_eps: 1.0e-5
+      # Anomaly checks default off (perf-first, matching the fp8 config). To debug NaN/Inf, set them
+      # true so training aborts and reports where the first NaN/Inf appears (loss vs grad).
+      check_for_nan_in_loss_and_grad: false # default true
+      check_for_spiky_loss: false # default false, but setting it here explicitly
+      check_for_large_grads: false # default false, but setting it here explicitly
+
+      # --- Model Parallel Config ---
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 1
+      expert_model_parallel_size: 1
+      overlap_grad_reduce: true
+      overlap_param_gather: true
+      gradient_accumulation_fusion: true
+      masked_softmax_fusion: true
+      ddp_average_in_collective: true
+      fused_single_qkv_rope: true
+
+      # --- Data Config ---
+      mock_data: false
+      train_data_path: "/data/c4-train.en_6_text_document"
+      valid_data_path: "/data/c4-validation-91205-samples.en_text_document"
+      test_data_path: null
+      seq_length: 8192
+      data_cache_path: /npy_indices
+      mmap_bin_files: true
+      data_cache_path: null
+
+      # --- Profiling Config ---
+      profile: false
+      use_pytorch_profiler: true
+      profile_ranks: [0]           # Only profile rank 0 to save disk space
+      profile_step_start: 8        # Start after warmup (step 8)
+      profile_step_end: 13        # Profile 5 iterations (8-12)
+      disable_profiler_activity_cpu: false     # GPU kernels only (smaller files)
+      torch_profiler_record_shapes: false     # Disable for smaller traces
+      torch_profiler_with_stack: false        # Disable for smaller traces
+      torch_profiler_use_gzip: true           # Compress output
+
+      # --- Checkpointing Config ---
+      finetune: false
+      auto_continue_train: false
+      load: null
+      no_load_optim: null
+      no_load_rng: null
+      save: null
+      save_interval: 2000000
+      no_save_optim: null
+      no_save_rng: null
+      disable_last_saving: true
+      ckpt_format: torch
+
+      # --- FSDP Config ---
+      use_torch_fsdp2: false
+      use_distributed_optimizer: true # this is needed for fsdp2
+
+      # Cross entropy flags
+      cross_entropy_fusion_impl: "te"
+      cross_entropy_loss_fusion: true
+
+      # --- Mixed Precision Config --- BF16 ---
+      # BF16 variant of llama3.1_8B-pretrain-fp8.yaml: the fp8 keys are simply omitted. Primus'
+      # trainer_base defaults to bf16: true, so with no fp8 block training runs in BF16. Use this
+      # config (via EXP=...pretrain-bf16.yaml) when you want a BF16 baseline instead of FP8 — e.g.
+      # to compare numerics/throughput or to sidestep FP8-specific issues.
+      accumulate_allreduce_grads_in_fp32: true
+      grad_reduce_in_bf16: false
+      attention_softmax_in_fp32: true
+
+
+      # --- Primus Turbo Config ---
+      # Primus-Turbo swaps Megatron's default TE/CK operators for Turbo's own kernels via patching.
+      # On this dense llama3.1-8B run (TP=1, DP=16) use_turbo_parallel_linear does NOT do TP comm
+      # overlap (there is no TP comm to overlap) — it simply replaces the linear GEMM (TE/hipBLASLt)
+      # with Turbo's BF16 GEMM kernel. Worth A/B-testing purely as a GEMM-kernel swap.
+      #
+      # IMPORTANT: these MUST be bare yaml booleans, NOT ${ENV:default} placeholders. Primus'
+      # yaml_loader resolves ${VAR:false} to the *string* "false" (it only coerces int/float, never
+      # bool), and a non-empty string is truthy -> the switch turns ON regardless of the env value.
+      # That bug silently enabled turbo attention and OOM'd MI308. Edit these lines directly to A/B:
+      #   baseline : all three false                      -> all TE/CK
+      #   +linear  : enable_primus_turbo + use_turbo_parallel_linear = true; attention stays false
+      #   +attn    : additionally use_turbo_attention: true (watch loss: bypasses the CK path and
+      #              our NVTE_CK_IS_V3_ATOMIC_FP32=1 fix; also raises peak memory)
+      # grouped_mlp / fused_router are MoE-only -> keep false for this dense model.
+      # Keep Turbo disabled to match the measured two-node baseline. Validate any kernel
+      # substitutions separately for numerical stability and performance.
+      enable_primus_turbo: false
+      use_turbo_attention: false
+      use_turbo_parallel_linear: false
+      use_turbo_grouped_mlp: false
+      moe_use_fused_router_with_aux_score: false
+      enable_turbo_attention_float8 : false

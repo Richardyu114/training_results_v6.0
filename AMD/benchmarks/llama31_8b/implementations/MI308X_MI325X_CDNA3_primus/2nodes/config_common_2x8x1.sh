@@ -19,8 +19,64 @@ fi
 _two_node_rank="${NODE_RANK:-0}"
 _two_node_master_addr="${MASTER_ADDR:-localhost}"
 _two_node_master_port="${MASTER_PORT:-29502}"
+_two_node_global_batch_size="${PRIMUS_GLOBAL_BATCH_SIZE:-32}"
+_two_node_bf16_exp=/workspace/code/2nodes/conf/llama3.1_8B-pretrain-bf16.yaml
+_two_node_fp8_exp=/workspace/code/2nodes/conf/llama3.1_8B-pretrain-fp8.yaml
+_two_node_exp="${EXP:-${_two_node_fp8_exp}}"
+_two_node_warmup_recipe="${WARMUP_RECIPE:-}"
+_two_node_lr="${PRIMUS_LR:-3e-4}"
+_two_node_min_lr="${PRIMUS_MIN_LR:-3e-5}"
+if [[ -z "${_two_node_warmup_recipe}" ]]; then
+    case "${_two_node_exp##*/}" in
+        llama3.1_8B-pretrain-bf16.yaml) _two_node_warmup_recipe=bf16 ;;
+        llama3.1_8B-pretrain-fp8.yaml) _two_node_warmup_recipe=fp8_hybrid ;;
+        *)
+            echo "ERROR: set WARMUP_RECIPE when overriding EXP=${_two_node_exp}" >&2
+            return 2
+            ;;
+    esac
+fi
 : "${PYTHONPATH:=}"
 source "${_base_config}" || return $?
+
+# Shared two-node training defaults. Snapshotting before the single-node base is sourced keeps
+# direct wrapper use and the launcher consistent: FP8 is the default, while BF16 remains an
+# explicit alternative.
+export EXP="${_two_node_exp}"
+export WARMUP_RECIPE="${_two_node_warmup_recipe}"
+export PRIMUS_LR="${_two_node_lr}"
+export PRIMUS_MIN_LR="${_two_node_min_lr}"
+
+# These variables are informational in the CDNA3 base configs; the YAML remains the source of
+# truth for training precision and scaling. Keep the metadata aligned with the standard 2-node
+# experiment YAML selected above.
+case "${EXP}" in
+    "${_two_node_bf16_exp}")
+        export FP8=false
+        export FP8_RECIPE=none
+        export MLLOG_LOWEST_NUMERICAL_PRECISION_LINEAR=bf16
+        ;;
+    "${_two_node_fp8_exp}")
+        export FP8=true
+        export FP8_RECIPE=e4m3
+        export MLLOG_LOWEST_NUMERICAL_PRECISION_LINEAR=fp8
+        ;;
+    *)
+        # A custom YAML owns its precise format/recipe. Keep only generic precision metadata here
+        # instead of incorrectly labelling another same-named file as the standard E4M3 recipe.
+        export FP8_RECIPE=custom
+        case "${EXP##*/}" in
+            *[Ff][Pp]8*)
+                export FP8=true
+                export MLLOG_LOWEST_NUMERICAL_PRECISION_LINEAR=fp8
+                ;;
+            *[Bb][Ff]16*)
+                export FP8=false
+                export MLLOG_LOWEST_NUMERICAL_PRECISION_LINEAR=bf16
+                ;;
+        esac
+        ;;
+esac
 
 export DGXSYSTEM="${_TWO_NODE_PLATFORM}_2x8x1"
 export NNODES=2
@@ -28,8 +84,23 @@ export NODE_RANK="${_two_node_rank}"
 export MASTER_ADDR="${_two_node_master_addr}"
 export MASTER_PORT="${_two_node_master_port}"
 
-# world_size=16, MBS=2, GBS=64 -> gradient accumulation = 2.
-export PRIMUS_GLOBAL_BATCH_SIZE=64
+# world_size=16, MBS=2, GBS=32 -> gradient accumulation=1. The launcher forwards an explicit
+# PRIMUS_GLOBAL_BATCH_SIZE override to both nodes.
+if [[ ! "${_two_node_global_batch_size}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: PRIMUS_GLOBAL_BATCH_SIZE must be a positive integer: ${_two_node_global_batch_size}" >&2
+    return 2
+fi
+export PRIMUS_GLOBAL_BATCH_SIZE="${_two_node_global_batch_size}"
+if (( PRIMUS_GLOBAL_BATCH_SIZE % (NNODES * GPUS_PER_NODE * PRIMUS_MICRO_BATCH_SIZE) != 0 )); then
+    echo "ERROR: PRIMUS_GLOBAL_BATCH_SIZE=${PRIMUS_GLOBAL_BATCH_SIZE} is not divisible by" \
+         "NNODES*GPUS_PER_NODE*MBS=$((NNODES * GPUS_PER_NODE * PRIMUS_MICRO_BATCH_SIZE))" >&2
+    return 2
+fi
+if (( EVAL_SAMPLES_INTERVAL % PRIMUS_GLOBAL_BATCH_SIZE != 0 )); then
+    echo "ERROR: EVAL_SAMPLES_INTERVAL=${EVAL_SAMPLES_INTERVAL} is not divisible by" \
+         "PRIMUS_GLOBAL_BATCH_SIZE=${PRIMUS_GLOBAL_BATCH_SIZE}" >&2
+    return 2
+fi
 export PRIMUS_EVAL_INTERVAL=$((EVAL_SAMPLES_INTERVAL / PRIMUS_GLOBAL_BATCH_SIZE))
 export MLLOG_SUBMISSION_PLATFORM="${_TWO_NODE_PLATFORM}_2node"
 export MLLOG_CONFIG_FILENAME=$(basename "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}")
@@ -116,4 +187,6 @@ export NCCL_NET_GDR_LEVEL
 echo "[config] ${DGXSYSTEM} network auto-detect: IFNAME=${NCCL_SOCKET_IFNAME} GID=${NCCL_IB_GID_INDEX} HCA=${NCCL_IB_HCA}" >&2
 
 unset _auto_gid _auto_hca _auto_ifname _base_config _first_hca _gid_type
-unset _hca_path _hca_vendor _two_node_dir _two_node_master_addr _two_node_master_port _two_node_rank
+unset _hca_path _hca_vendor _two_node_bf16_exp _two_node_dir _two_node_exp
+unset _two_node_fp8_exp _two_node_global_batch_size _two_node_lr _two_node_min_lr
+unset _two_node_master_addr _two_node_master_port _two_node_rank _two_node_warmup_recipe
