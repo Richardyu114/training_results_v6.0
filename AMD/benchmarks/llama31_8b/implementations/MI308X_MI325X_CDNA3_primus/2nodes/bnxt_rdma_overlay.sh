@@ -220,7 +220,7 @@ bnxt_rdma_prepare() {
     local image="$4"
     local new_verbs old_verbs new_provider old_provider verbs_override provider_override
     local discovery mode driver verbs provider soname provider_dst extra
-    local image_env image_ld_path line
+    local image_ld_path
 
     [[ "${nnodes}" =~ ^[1-9][0-9]*$ ]] || {
         echo "[rdma] ERROR: NNODES must be a positive integer: ${nnodes}" >&2
@@ -266,11 +266,12 @@ bnxt_rdma_prepare() {
         return 1
     fi
 
-    image_env="$(docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${image}")"
-    image_ld_path=""
-    while IFS= read -r line; do
-        [[ "${line}" == LD_LIBRARY_PATH=* ]] && image_ld_path="${line#LD_LIBRARY_PATH=}"
-    done <<< "${image_env}"
+    # Filter inside the command substitution so caller-side `set -x` cannot dump the
+    # image's complete environment into the training log.
+    image_ld_path="$(
+        docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${image}" \
+            | awk -F= '$1 == "LD_LIBRARY_PATH" {sub(/^[^=]*=/, ""); value=$0; found=1} END {if (found) print value}'
+    )"
 
     docker_args+=(
         --mount "type=bind,src=${verbs},dst=/opt/host-rdma/lib/libibverbs.so.1,readonly"

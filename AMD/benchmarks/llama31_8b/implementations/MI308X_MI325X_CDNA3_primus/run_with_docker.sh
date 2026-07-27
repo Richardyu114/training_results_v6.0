@@ -162,7 +162,14 @@ for _experiment_index in $(seq 1 "${NEXP}"); do
     # Use existing SEED if set; otherwise use a new RANDOM value
     _run_config_env=("${_base_config_env[@]}" --env=SEED="${SEED:-$RANDOM}")
     echo "launching experiment using: ${_run_config_env[*]} ${_cont_name} /workspace/code/run_and_time.sh"
-    docker exec "${_run_config_env[@]}" "${_cont_name}" bash /workspace/code/run_and_time.sh
+    docker exec "${_run_config_env[@]}" "${_cont_name}" bash -c '
+      echo "[docker-env] BEGIN effective training environment"
+      env | LC_ALL=C sort | while IFS= read -r entry; do
+        printf "[docker-env] %s\n" "${entry}"
+      done
+      echo "[docker-env] END effective training environment"
+      exec bash /workspace/code/run_and_time.sh
+    '
   ) 2>&1 | grep --line-buffered -v "connected peer ranks" | tee "${_logfile_base}_${_experiment_index}.log"
 
   if [ "${CHECK_COMPLIANCE}" -eq 1 ]; then

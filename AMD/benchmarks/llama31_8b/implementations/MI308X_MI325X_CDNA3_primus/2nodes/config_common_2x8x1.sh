@@ -27,6 +27,20 @@ _two_node_warmup_recipe="${WARMUP_RECIPE:-}"
 _two_node_lr="${PRIMUS_LR:-3e-4}"
 _two_node_min_lr="${PRIMUS_MIN_LR:-3e-5}"
 _two_node_lr_warmup_iters="${PRIMUS_LR_WARMUP_ITERS:-64}"
+_two_node_nvte_bf16_cvt_is_set=0
+_two_node_nvte_bf16_cvt=""
+if [[ -n "${NVTE_CK_HOW_V3_BF16_CVT+x}" ]]; then
+    case "${NVTE_CK_HOW_V3_BF16_CVT}" in
+        0|1|2)
+            _two_node_nvte_bf16_cvt_is_set=1
+            _two_node_nvte_bf16_cvt="${NVTE_CK_HOW_V3_BF16_CVT}"
+            ;;
+        *)
+            echo "ERROR: NVTE_CK_HOW_V3_BF16_CVT must be 0, 1, or 2" >&2
+            return 2
+            ;;
+    esac
+fi
 if [[ -z "${_two_node_warmup_recipe}" ]]; then
     case "${_two_node_exp##*/}" in
         llama3.1_8B-pretrain-bf16.yaml) _two_node_warmup_recipe=bf16 ;;
@@ -57,11 +71,23 @@ case "${EXP}" in
         export FP8=false
         export FP8_RECIPE=none
         export MLLOG_LOWEST_NUMERICAL_PRECISION_LINEAR=bf16
+        # Prefer conservative round-to-nearest-even for the standard BF16 recipe.
+        if (( _two_node_nvte_bf16_cvt_is_set )); then
+            export NVTE_CK_HOW_V3_BF16_CVT="${_two_node_nvte_bf16_cvt}"
+        else
+            export NVTE_CK_HOW_V3_BF16_CVT=0
+        fi
         ;;
     "${_two_node_fp8_exp}")
         export FP8=true
         export FP8_RECIPE=e4m3
         export MLLOG_LOWEST_NUMERICAL_PRECISION_LINEAR=fp8
+        # Preserve the RTZ mode used by the converged standard FP8 runs.
+        if (( _two_node_nvte_bf16_cvt_is_set )); then
+            export NVTE_CK_HOW_V3_BF16_CVT="${_two_node_nvte_bf16_cvt}"
+        else
+            export NVTE_CK_HOW_V3_BF16_CVT=2
+        fi
         ;;
     *)
         # A custom YAML owns its precise format/recipe. Keep only generic precision metadata here
@@ -191,5 +217,5 @@ echo "[config] ${DGXSYSTEM} network auto-detect: IFNAME=${NCCL_SOCKET_IFNAME} GI
 unset _auto_gid _auto_hca _auto_ifname _base_config _first_hca _gid_type
 unset _hca_path _hca_vendor _two_node_bf16_exp _two_node_dir _two_node_exp
 unset _two_node_fp8_exp _two_node_global_batch_size _two_node_lr _two_node_min_lr
-unset _two_node_lr_warmup_iters
+unset _two_node_lr_warmup_iters _two_node_nvte_bf16_cvt _two_node_nvte_bf16_cvt_is_set
 unset _two_node_master_addr _two_node_master_port _two_node_rank _two_node_warmup_recipe
