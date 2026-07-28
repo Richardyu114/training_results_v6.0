@@ -83,7 +83,7 @@ PRIMUS_LR_WARMUP_ITERS="${PRIMUS_LR_WARMUP_ITERS:-64}"
 
 # Preserve caller overrides on both nodes. The two optional RDMA paths normally
 # stay unset so each Docker daemon host discovers its own matching pair. The NVTE
-# entry lets callers override the precision-specific default for a controlled rounding-mode A/B.
+# entry lets callers override the config default for a controlled rounding-mode A/B.
 mapfile -t CALLER_DIST_ENV < <(
   compgen -e \
     | grep -E '^(NCCL_|TORCH_NCCL_|GLOO_|TORCH_DISTRIBUTED_DEBUG$|NVTE_CK_HOW_V3_BF16_CVT$|BNXT_RDMA_LIBIBVERBS_HOST_PATH$|BNXT_RDMA_PROVIDER_HOST_PATH$|MLPERF_HOST_LIBIBVERBS_PATH$|MLPERF_HOST_BNXT_PROVIDER_PATH$)' \

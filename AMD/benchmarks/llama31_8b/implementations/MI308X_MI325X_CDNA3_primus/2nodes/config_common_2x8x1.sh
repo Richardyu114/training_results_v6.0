@@ -82,11 +82,11 @@ case "${EXP}" in
         export FP8=true
         export FP8_RECIPE=e4m3
         export MLLOG_LOWEST_NUMERICAL_PRECISION_LINEAR=fp8
-        # Preserve the RTZ mode used by the converged standard FP8 runs.
+        # Use RTNE for the standard FP8 recipe while its run-to-run stability is evaluated.
         if (( _two_node_nvte_bf16_cvt_is_set )); then
             export NVTE_CK_HOW_V3_BF16_CVT="${_two_node_nvte_bf16_cvt}"
         else
-            export NVTE_CK_HOW_V3_BF16_CVT=2
+            export NVTE_CK_HOW_V3_BF16_CVT=0
         fi
         ;;
     *)

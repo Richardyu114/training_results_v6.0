@@ -194,8 +194,10 @@ export PRIMUS_TRAIN_ITERS=50
 export PRIMUS_LR=3e-4
 export PRIMUS_MIN_LR=3e-5
 export MLPERF_VERBOSE_LOGS=1
+# Use RTNE (round to nearest, ties to even) for CK FA v3 float-to-BF16 conversion on gfx942.
+export NVTE_CK_HOW_V3_BF16_CVT=0
 
-# FP8 (E4M3 + tensorwise/current, CK v3 BF16 conversion 2/RTZ) is selected by default.
+# FP8 (E4M3 + tensorwise/current, CK v3 BF16 conversion 0/RTNE) is selected by default.
 bash run_with_docker_2node.sh
 ```
 
@@ -208,7 +210,7 @@ The launcher defaults to 50 iterations. Both platforms default to GBS32, LR `3e-
 
 | Mode | Experiment YAML | Synthetic warmup | CK v3 BF16 conversion | Notes |
 |---|---|---|---|---|
-| FP8 (default) | `/workspace/code/2nodes/conf/llama3.1_8B-pretrain-fp8.yaml` | `fp8_hybrid` | `2` (RTZ) | E4M3 forward + backward, tensorwise/current scaling, three FP32 settings, and collective AVG |
+| FP8 (default) | `/workspace/code/2nodes/conf/llama3.1_8B-pretrain-fp8.yaml` | `fp8_hybrid` | `0` (RTNE) | E4M3 forward + backward, tensorwise/current scaling, three FP32 settings, and collective AVG |
 | BF16 (optional) | `/workspace/code/2nodes/conf/llama3.1_8B-pretrain-bf16.yaml` | `bf16` | `0` (RTNE) | BF16 model path with the same three FP32 settings and collective AVG |
 
 With no precision override, the launcher selects the FP8 YAML and infers the `fp8_hybrid`
@@ -216,8 +218,6 @@ synthetic warmup. To select the optional BF16 baseline, set these before launchi
 
 ```bash
 export EXP=/workspace/code/2nodes/conf/llama3.1_8B-pretrain-bf16.yaml
-# Use RTNE (round to nearest, ties to even) for CK FA v3 float-to-BF16 conversion on gfx942.
-export NVTE_CK_HOW_V3_BF16_CVT=0
 export WARMUP_RECIPE=bf16
 ```
 
@@ -241,7 +241,7 @@ divide the 12,288-sample evaluation interval exactly.
 | `PRIMUS_LR_WARMUP_ITERS` | `64` | Learning-rate warmup iterations forwarded identically to both nodes |
 | `EXP` | two-node FP8 YAML | Experiment-YAML selection; use the two-node BF16 YAML for the optional BF16 baseline |
 | `WARMUP_RECIPE` | inferred from `EXP` | `bf16` for the standard BF16 YAML, `fp8_hybrid` for the standard FP8 YAML; required for custom YAML names |
-| `NVTE_CK_HOW_V3_BF16_CVT` | inferred from `EXP` | `2`/RTZ for standard FP8 and `0`/RTNE for standard BF16; explicit `0`, `1`, or `2` overrides both nodes |
+| `NVTE_CK_HOW_V3_BF16_CVT` | `0` (RTNE) | Standard FP8 and BF16 both use RTNE; explicit `0`, `1`, or `2` overrides both nodes for controlled A/B tests |
 | `MLPERF_VERBOSE_LOGS` | `1` | Enable per-iteration training output |
 | `RUN_ID` | generated | Suffix for container and launcher-log names |
 | `LOG_PREFIX` | `run_2node` | Launcher-log filename prefix |

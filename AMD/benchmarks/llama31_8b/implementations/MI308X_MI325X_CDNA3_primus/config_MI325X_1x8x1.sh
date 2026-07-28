@@ -46,9 +46,9 @@ export NVTE_FUSED_ATTN_AOTRITON=1
 export NVTE_CK_USES_FWD_V3=1
 export NVTE_CK_USES_BWD_V3=1
 # AITER FA v3 float-to-BF16 rounding on gfx942: 0=RTNE, 1=RTNA, 2=RTZ.
-# The default FP8 path uses the previously converged RTZ mode. Precision-specific overlays may
-# select a different mode (the two-node BF16 recipe uses RTNE); an explicit caller value wins.
-export NVTE_CK_HOW_V3_BF16_CVT="${NVTE_CK_HOW_V3_BF16_CVT:-2}"
+# Use RTNE as the current default for both FP8 and BF16 while FP8 stability is evaluated.
+# An explicit caller value remains available for controlled rounding-mode A/B tests.
+export NVTE_CK_HOW_V3_BF16_CVT="${NVTE_CK_HOW_V3_BF16_CVT:-0}"
 # NVTE_CK_IS_V3_ATOMIC_FP32=1 (TE default) is REQUIRED on CDNA3 (gfx942). The MI350X submission
 # set it to 0 (non-FP32 atomic accumulation in the CK v3 attention backward), which overflows to
 # Inf on gfx942 with seq_length=8192 — training then hits "found Inf in local grad norm ... in
