@@ -1,0 +1,178 @@
+# Llama 3.1 70B pretrain, FP16, TP=2 x PP=8 on 2x8 MI325X (world_size=16 -> DP=1).
+# Performance/enablement recipe. This is not an MLPerf submission config and has no
+# convergence target: it runs a fixed number of steps and reports throughput.
+work_group: ${TEAM:amd}
+user_name: ${USER:root}
+exp_name: ${EXP_NAME:llama3.1_70B-pretrain-fp16}
+workspace: ./output
+
+modules:
+  pre_trainer:
+    framework: megatron
+    config: pre_trainer.yaml
+
+    # Selects the 70B architecture from Primus' model registry:
+    #   llama3.1_70B.yaml -> llama3_70B.yaml -> llama3_base.yaml -> llama_base.yaml
+    # (num_layers=80, hidden_size=8192, ffn_hidden_size=28672, heads=64, query_groups=8).
+    model: llama3.1_70B.yaml
+    overrides:
+      # The Llama 3.1 family shares one tokenizer (vocab 128256), so the 8B HF repo
+      # mounted at /model is the correct tokenizer source for 70B as well.
+      # Primus routes Llama3Tokenizer and HuggingFaceTokenizer to the same
+      # _HuggingFaceTokenizer(trust_remote_code=True) loader.
+      tokenizer_model: /model
+
+      # --- Logging Config ---
+      disable_wandb: true
+      disable_tensorboard: true
+      stderr_sink_level: ${PRIMUS_STDERR_SINK_LEVEL:INFO}
+      log_interval: ${PRIMUS_LOG_INTERVAL:10}
+      log_throughput: ${PRIMUS_LOG_THROUGHPUT:true}
+      log_avg_skip_iterations: 2
+      log_avg_reset_interval: 50
+
+      # --- Evaluation ---
+      # Disabled for the performance run: eval_interval is kept above any practical
+      # train_iters so validation never fires inside the timed region.
+      eval_iters: ${PRIMUS_EVAL_ITERS:0}
+      eval_interval: ${PRIMUS_EVAL_INTERVAL:1000000}
+
+      # --- Training Config ---
+      train_iters: ${PRIMUS_TRAIN_ITERS:200}
+      micro_batch_size: ${PRIMUS_MICRO_BATCH_SIZE:2}
+      # world_size 16 / (TP2 * PP8) = DP 1, so GBS 64 = 1 * MBS 2 * 32 grad-accum steps.
+      global_batch_size: ${PRIMUS_GLOBAL_BATCH_SIZE:64}
+      seq_length: 1024
+      max_position_embeddings: 1024
+      seed: ${SEED:1234}
+      lr: ${PRIMUS_LR:1e-5}
+      min_lr: ${PRIMUS_MIN_LR:1e-6}
+      # Warmup as a FRACTION of the schedule, not a step count: Megatron computes
+      # lr_warmup_steps = lr_warmup_fraction * lr_decay_steps (training.py:1422), and
+      # lr_decay_iters below is train_iters, so 0.1 is exactly 10% of whatever
+      # train_iters you run -- 200 iters -> 20, 1000 iters -> 100, no edit needed.
+      # lr_warmup_iters MUST be pinned to 0 here. Megatron asserts that only one of
+      # lr_warmup_fraction / lr_warmup_iters is set (arguments.py:1005-1007), and the
+      # module config we inherit -- pre_trainer.yaml, not trainer_base.yaml -- defaults
+      # lr_warmup_iters to 40, so leaving it out aborts at startup.
+      lr_warmup_fraction: ${PRIMUS_LR_WARMUP_FRACTION:0.1}
+      lr_warmup_iters: 0
+      # Cosine decays over the training schedule rather than over a fixed long horizon, so
+      # the LR trajectory is self-consistent at any train_iters and min_lr is actually
+      # reached. (The llama31_8b recipe instead pins 1199936, the MLPerf reference horizon,
+      # because it must reproduce one fixed curve across runs of unknown length.)
+      lr_decay_iters: ${PRIMUS_TRAIN_ITERS:200}
+      lr_decay_style: cosine
+      weight_decay: 0.1
+      adam_beta1: 0.9
+      adam_beta2: 0.95
+      eod_mask_loss: false
+      init_method_std: 0.02
+      norm_epsilon: 1.0e-5
+      adam_eps: 1.0e-5
+      check_for_nan_in_loss_and_grad: false
+      check_for_spiky_loss: false
+      check_for_large_grads: false
+
+      # --- Model Parallel Config ---
+      # Integer placeholders are safe here: Primus' yaml loader coerces int/float values.
+      # (Only booleans must be bare literals -- see the Turbo block at the end.)
+      tensor_model_parallel_size: ${PRIMUS_TENSOR_PARALLEL_SIZE:2}
+      pipeline_model_parallel_size: ${PRIMUS_PIPELINE_PARALLEL_SIZE:8}  # 80 layers / 8 = 10 per stage
+      virtual_pipeline_model_parallel_size: null
+      context_parallel_size: 1
+      expert_model_parallel_size: 1
+      sequence_parallel: true
+      # Distributed (ZeRO-1) optimizer. At DP=1 there is one shard, so it is a no-op for
+      # memory and adds no collectives; kept on to match the 8B two-node recipe and so the
+      # same yaml behaves correctly if the layout is ever changed to give DP > 1.
+      use_distributed_optimizer: true
+      # Matches the 8B two-node recipe. At DP=1 the gradient all-reduce and parameter
+      # all-gather are no-ops, so these overlap nothing; Megatron requires
+      # overlap_param_gather to be paired with overlap_grad_reduce and with the
+      # distributed optimizer, and all three are satisfied here.
+      overlap_grad_reduce: true
+      overlap_param_gather: true
+      # Interleaved P2P overlap requires virtual pipeline stages. Megatron forces this to
+      # False when virtual_pipeline_model_parallel_size is null and warns at PP > 1; set it
+      # explicitly so the yaml states the effective value rather than being silently
+      # overridden.
+      overlap_p2p_comm: false
+      # Optimizer state stays on GPU. CPU offload would additionally require
+      # use_precision_aware_optimizer, and there is no memory pressure here
+      # (~78 GiB/GPU of 256 GB).
+      optimizer_cpu_offload: false
+      overlap_cpu_optimizer_d2h_h2d: false
+      gradient_accumulation_fusion: true
+      masked_softmax_fusion: true
+      ddp_average_in_collective: true
+      fused_single_qkv_rope: true
+
+      # --- Data Config ---
+      # Same preprocessed C4 corpus as the 8B runs; it is tokenized with the Llama 3.1
+      # tokenizer, so it is directly reusable here.
+      mock_data: false
+      train_data_path: "/data/c4-train.en_6_text_document"
+      valid_data_path: "/data/c4-validation-91205-samples.en_text_document"
+      test_data_path: null
+      mmap_bin_files: true
+      data_cache_path: null
+
+      # --- Profiling Config ---
+      profile: false
+      use_pytorch_profiler: true
+      profile_ranks: [0]
+      profile_step_start: 8
+      profile_step_end: 13
+      disable_profiler_activity_cpu: false
+      torch_profiler_record_shapes: false
+      torch_profiler_with_stack: false
+      torch_profiler_use_gzip: true
+
+      # --- Checkpointing Config ---
+      finetune: false
+      auto_continue_train: false
+      load: null
+      no_load_optim: null
+      no_load_rng: null
+      save: null
+      save_interval: 2000000
+      no_save_optim: null
+      no_save_rng: null
+      disable_last_saving: true
+      ckpt_format: torch
+
+      # --- FSDP Config ---
+      use_torch_fsdp2: false
+
+      # Cross entropy flags
+      cross_entropy_fusion_impl: "te"
+      cross_entropy_loss_fusion: true
+
+      # --- Mixed Precision Config --- FP16 ---
+      # Primus' trainer_base defaults to bf16: true, so bf16 must be turned off explicitly
+      # for fp16 to take effect. No fp8 block is present, so linear layers run in fp16.
+      fp16: true
+      bf16: false
+      # Loss scaling is left at the Primus/Megatron defaults: dynamic scaling
+      # (loss_scale: null) starting at initial_loss_scale 2**32, halving on an overflowing
+      # step and doubling after loss_scale_window=1000 clean steps. FP16 needs this because
+      # its representable range bottoms out around 6e-8, below which small gradients flush
+      # to zero; scaling the loss lifts them back into range and the optimizer unscales
+      # before the update. BF16 shares FP32's exponent range and needs none of it.
+      # fp16 has a much narrower dynamic range than bf16; keep the reduction and softmax
+      # accumulations in fp32.
+      accumulate_allreduce_grads_in_fp32: true
+      grad_reduce_in_bf16: false
+      attention_softmax_in_fp32: true
+
+      # --- Primus Turbo Config ---
+      # These MUST be bare yaml booleans, not ${ENV:default} placeholders: Primus' yaml
+      # loader resolves ${VAR:false} to the *string* "false", which is truthy and silently
+      # turns the switch on. Keep Turbo off for the baseline.
+      enable_primus_turbo: false
+      use_turbo_attention: false
+      use_turbo_parallel_linear: false
+      use_turbo_grouped_mlp: false
+      moe_use_fused_router_with_aux_score: false
+      enable_turbo_attention_float8: false
