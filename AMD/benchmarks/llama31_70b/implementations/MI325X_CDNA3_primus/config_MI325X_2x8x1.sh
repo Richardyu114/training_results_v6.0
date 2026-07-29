@@ -30,9 +30,10 @@ export PRIMUS_GLOBAL_BATCH_SIZE="${PRIMUS_GLOBAL_BATCH_SIZE:-64}"
 # --- Schedule ---
 export PRIMUS_LR="${PRIMUS_LR:-1e-5}"
 export PRIMUS_MIN_LR="${PRIMUS_MIN_LR:-1e-6}"
-# Short performance run. Throughput stabilizes well before step 200; raise for a longer
-# soak, lower to ~30 for a fast functional check.
-export PRIMUS_TRAIN_ITERS="${PRIMUS_TRAIN_ITERS:-200}"
+# Short performance run. Measured: sec/iter differs 0.06% between 30 and 200 iters, so 100
+# is already deep into steady state. Raise for a longer soak, lower to ~30 for a fast
+# functional check.
+export PRIMUS_TRAIN_ITERS="${PRIMUS_TRAIN_ITERS:-100}"
 # Learning-rate warmup is expressed as a fraction of the schedule, not a step count, so it
 # stays proportional when PRIMUS_TRAIN_ITERS changes. Megatron derives the step count itself
 # (lr_warmup_steps = lr_warmup_fraction * lr_decay_steps, and lr_decay_iters == train_iters),
@@ -69,9 +70,12 @@ export CUDA_DEVICE_MAX_CONNECTIONS=1
 export NVTE_FUSED_ATTN=1
 export NVTE_FUSED_ATTN_CK=1
 export NVTE_FUSED_ATTN_AOTRITON=1
+# bf16 uses  fmha_fwd_v3, fp16 uses fmha_fwd_ck
 export NVTE_CK_USES_FWD_V3=1
 export NVTE_CK_USES_BWD_V3=1
 export NVTE_FLASH_ATTN=0
+# export AITER_LOG_LEVEL=ERROR
+
 # acc
 export NVTE_CK_IS_V3_ATOMIC_FP32=1
 export NVTE_CK_HOW_V3_BF16_CVT=0

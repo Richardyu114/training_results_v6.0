@@ -1,9 +1,9 @@
-# Llama 3.1 70B pretrain, FP16, TP=2 x PP=8 on 2x8 MI325X (world_size=16 -> DP=1).
+# Llama 3.1 70B pretrain, bf16, TP=2 x PP=8 on 2x8 MI325X (world_size=16 -> DP=1).
 # Performance/enablement recipe. This is not an MLPerf submission config and has no
 # convergence target: it runs a fixed number of steps and reports throughput.
 work_group: ${TEAM:amd}
 user_name: ${USER:root}
-exp_name: ${EXP_NAME:llama3.1_70B-pretrain-fp16}
+exp_name: ${EXP_NAME:llama3.1_70B-pretrain-bf16}
 workspace: ./output
 
 modules:
@@ -153,19 +153,17 @@ modules:
       cross_entropy_fusion_impl: "te"
       cross_entropy_loss_fusion: true
 
-      # --- Mixed Precision Config --- FP16 ---
-      # Primus' trainer_base defaults to bf16: true, so bf16 must be turned off explicitly
-      # for fp16 to take effect. No fp8 block is present, so linear layers run in fp16.
-      fp16: true
-      bf16: false
-      # Loss scaling is left at the Primus/Megatron defaults: dynamic scaling
-      # (loss_scale: null) starting at initial_loss_scale 2**32, halving on an overflowing
-      # step and doubling after loss_scale_window=1000 clean steps. FP16 needs this because
-      # its representable range bottoms out around 6e-8, below which small gradients flush
-      # to zero; scaling the loss lifts them back into range and the optimizer unscales
-      # before the update. BF16 shares FP32's exponent range and needs none of it.
-      # fp16 has a much narrower dynamic range than bf16; keep the reduction and softmax
-      # accumulations in fp32.
+      # --- Mixed Precision Config --- bf16 ---
+      # No loss scaling here: bf16 has the same exponent range as fp32, so gradients
+      # don't underflow and Megatron skips the dynamic scaler entirely.
+      fp16: false
+      bf16: true
+      # The three below are kept identical to the fp16 recipe so the two runs differ
+      # only in the compute dtype. They are not redundant under bf16: bf16 has just 8
+      # mantissa bits (fp16 has 10), so it is *less* accurate per-value than fp16 and
+      # the accumulations are exactly where that hurts. Reducing 16 ranks' gradients in
+      # bf16 would round every partial sum; softmax in bf16 would do the same across
+      # the sequence. Both stay in fp32.
       accumulate_allreduce_grads_in_fp32: true
       grad_reduce_in_bf16: false
       attention_softmax_in_fp32: true
