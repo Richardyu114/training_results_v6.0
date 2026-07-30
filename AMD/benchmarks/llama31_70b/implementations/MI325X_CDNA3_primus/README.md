@@ -53,7 +53,7 @@ gunzip -c /tmp/llama31_70b_mi325x.tar.gz | docker load
 
 This recipe reuses the llama31_8b assets **unchanged**. The Llama 3.1 family shares one
 tokenizer (vocab 128256), so the C4 corpus tokenized for 8B is directly valid for 70B, and
-128256 is divisible by `128 x TP=2`, so no vocab padding is needed. If you already have
+128256 is divisible by `TP`, so no vocab padding is needed. If you already have
 these staged for an 8B run, skip to step 4 and point `DATADIR` / `MODELDIR` at them.
 
 Download **on the host, not inside the container** — the image contains only code. Pick any
@@ -107,8 +107,6 @@ mkdir -p "$LOGDIR" && chmod -R 777 "$LOGDIR"
 bash run_with_docker_2node.sh
 ```
 
-Optional host tuning, on both nodes before the run: `sudo bash runtime_tunables.sh`.
-
 Defaults applied by the launcher: `DGXSYSTEM_2N=MI325X_2x8x1`, `MASTER_PORT=29502`,
 `SSH_USER=root`, `SSH_PORT=22`, `EXP=/workspace/code/conf/llama3.1_70B-pretrain-fp16.yaml`,
 `PRIMUS_GLOBAL_BATCH_SIZE=64`, `PRIMUS_LR=1e-5`, `PRIMUS_MIN_LR=1e-6`,
@@ -119,20 +117,8 @@ For a quick functional check before the full run, use the same command with
 
 ## 5. Read the results
 
-```bash
-# per-iteration loss and throughput
-grep -E "iteration +[0-9]+/" run_2node_70b_*_node0.log | tail -20
-
-# average the throughput over the steady-state region (skip the first ~20 steps)
-grep -oP 'throughput per GPU \(TFLOP/s/GPU\): \K[0-9.]+' run_2node_70b_*_node0.log \
-  | tail -n +20 | awk '{s+=$1; n++} END {printf "mean TFLOP/s/GPU = %.1f over %d iters\n", s/n, n}'
-
-# total wall time of the timed region
-grep RESULT run_2node_70b_*_node0.log
-```
-
 Full container logs and the MLPerf-style event log land in `$LOGDIR`
-(`<datestamp>_1.log` and `mlperf_logging.out`).
+(per-iter loss / TFLOP/s info please see node1 log).
 
 ---
 

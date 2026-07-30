@@ -19,8 +19,8 @@ export EXP="${EXP:-/workspace/code/conf/llama3.1_70B-pretrain-fp16.yaml}"
 export DATA_PATH=/data
 
 # --- Parallel layout ---
-export PRIMUS_TENSOR_PARALLEL_SIZE=2
-export PRIMUS_PIPELINE_PARALLEL_SIZE=8   # 80 layers / 8 = 10 layers per stage
+export PRIMUS_TENSOR_PARALLEL_SIZE="${PRIMUS_TENSOR_PARALLEL_SIZE:-2}"
+export PRIMUS_PIPELINE_PARALLEL_SIZE="${PRIMUS_PIPELINE_PARALLEL_SIZE:-8}"   # 80 layers / 8 = 10 layers per stage
 
 # --- Batch ---
 # world_size 16 / (TP2 * PP8) = DP 1. GBS 64 = DP1 * MBS2 * 32 accumulation steps.
